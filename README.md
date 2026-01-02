@@ -69,7 +69,6 @@ The system listens continuously through the LiveKit audio pipeline.
 
 **Goal:** convert raw human speech into structured intent.
 
----
 
 ### 2. Speech-to-Text (STT)
 
@@ -80,7 +79,6 @@ The system listens continuously through the LiveKit audio pipeline.
 **Output Example:**
 open my desktop and list files
 
----
 
 ### 3. Intent Routing
 
@@ -95,7 +93,6 @@ Intent: list_directory,
 Entity: Desktop
 
 
----
 
 ### 4. Task Planning Engine
 
@@ -111,7 +108,6 @@ Generated plan:
 2. summarize(text)  
 3. send_email(summary)  
 
----
 
 ### 5. Tool Execution Layer
 
@@ -126,7 +122,6 @@ Each step is executed using real system tools.
 
 All actions are logged and verified.
 
----
 
 ### 6. Memory & Knowledge Retrieval
 
@@ -138,7 +133,6 @@ Cortex-OS builds personal intelligence:
 
 This allows proactive behavior instead of repeated instruction.
 
----
 
 ### 7. Verification & Safety
 
@@ -148,7 +142,6 @@ Before risky execution:
 - Destructive commands are blocked  
 - OS operations are sandboxed  
 
----
 
 ### 8. Learning Loop
 
@@ -158,7 +151,6 @@ The system evolves by observing patterns:
 - Builds user-specific workflows  
 - Improves automation accuracy  
 
----
 
 ### 9. Response Delivery
 
