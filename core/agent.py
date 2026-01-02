@@ -18,7 +18,7 @@ from prompts.system_prompt import SYSTEM_PROMPT
 from prompts.session_prompt import SESSION_PROMPT
 
 from tools import (
-    search,
+   search,
     get_weather,
     send_email,
     open_file,
@@ -26,6 +26,17 @@ from tools import (
     create_folder,
     delete_path,
     run_command,
+    scrape_page,
+    write_file,
+    read_file,
+    move_file,
+    delete_file,
+    copy_file,
+    open_url,
+    search_youtube,
+    search_google,
+    open_github,
+    open_stackoverflow
 )
 
 from memory.memory_manager import MemoryManager
@@ -35,7 +46,7 @@ setup_logging()
 logger = logging.getLogger("JARVIS.Agent")
 
 tools = [
-    search,
+  search,
     get_weather,
     send_email,
     open_file,
@@ -43,6 +54,17 @@ tools = [
     create_folder,
     delete_path,
     run_command,
+    scrape_page,
+    write_file,
+    read_file,
+    move_file,
+    delete_file,
+    copy_file,
+    open_url,
+    search_youtube,
+    search_google,
+    open_github,
+    open_stackoverflow
 ]
 
 
