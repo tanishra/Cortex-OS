@@ -7,10 +7,15 @@ from tools.registry import (
     create_folder,
     delete_path,
     run_command,
-    scrape_page
+    scrape_page,
+    write_file,
+    read_file,
+    move_file,
+    delete_file,
+    copy_file
 )
 
 __all__ = [
     "search", "get_weather", "send_email",
-    "open_file", "list_directory", "create_folder", "delete_path", "run_command","scrape_page"
+    "open_file", "list_directory", "create_folder", "delete_path", "run_command","scrape_page","read_file","write_file","copy_file","move_file","delete_file"
 ]
