@@ -9,11 +9,27 @@ logger = logging.getLogger("JARVIS.WebScraper")
 @function_tool()
 async def scrape_page(context: RunContext, url: str, max_chars: int = 4000) -> str:
     """
-    Scrape visible text content from a web page.
-
+    Scrape the content of a web page and return a cleaned text snippet.
+    This function fetches the content of the specified URL, removes unnecessary
+    elements such as scripts, styles, and noscripts, and extracts readable text.
+    The extracted text is truncated to a maximum number of characters specified
+    by `max_chars`.
     Args:
-        url: Web page URL (scheme optional)
-        max_chars: Maximum characters to return
+        context (RunContext): The runtime context for the operation.
+        url (str): The URL of the web page to scrape. If the URL does not start
+            with "http", "https://" will be prepended automatically.
+        max_chars (int, optional): The maximum number of characters to return
+            from the scraped content. Defaults to 4000.
+    Returns:
+        str: A cleaned and truncated snippet of the web page content. If no
+        readable content is found, or if an error occurs, an appropriate error
+        message is returned.
+    Raises:
+        None: All exceptions are caught and logged, and an error message is
+        returned instead of raising exceptions.
+    Notes:
+        - The function uses a custom User-Agent header to mimic a browser request.
+        - The function logs the scraping process, including errors, for debugging.
     """
 
     try:
