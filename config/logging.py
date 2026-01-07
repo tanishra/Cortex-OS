@@ -1,5 +1,6 @@
 import logging
 import sys
+import json
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from config.settings import settings
@@ -19,7 +20,7 @@ class JsonFormatter(logging.Formatter):
             "module": record.module,
             "message": record.getMessage(),
         }
-        return str(log_record)
+        return json.dumps(log_record, ensure_ascii=False)
 
 
 def setup_logging() -> None:
@@ -36,7 +37,7 @@ def setup_logging() -> None:
     file_handler = RotatingFileHandler(
         LOG_FILE,
         maxBytes=10_000_000,
-        backupCount=5
+        backupCount=5,
     )
     file_handler.setFormatter(formatter)
 
