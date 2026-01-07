@@ -173,3 +173,54 @@ async def go_forward(context: RunContext) -> str:
     ctx = await _get_browser()
     await ctx.pages[-1].go_forward()
     return "Went forward"
+
+@function_tool()
+async def close_current_tab(context: RunContext) -> str:
+    try:
+        ctx = await _get_browser()
+        page = ctx.pages[-1]
+        await page.close()
+        logger.info("Closed current tab")
+        return "Closed current tab."
+    except Exception:
+        logger.exception("Failed to close current tab")
+        return "Could not close current tab."
+
+
+@function_tool()
+async def close_tab_by_index(context: RunContext, index: int) -> str:
+    try:
+        ctx = await _get_browser()
+        await ctx.pages[index].close()
+        logger.info(f"Closed tab {index}")
+        return f"Closed tab {index}."
+    except Exception:
+        logger.exception(f"Failed to close tab {index}")
+        return f"Could not close tab {index}."
+
+@function_tool()
+async def close_tab_by_title(context: RunContext, title: str) -> str:
+    try:
+        ctx = await _get_browser()
+        for page in ctx.pages:
+            if title.lower() in (await page.title()).lower():
+                await page.close()
+                logger.info(f"Closed tab with title: {title}")
+                return f"Closed tab containing {title}."
+        return f"No tab found containing {title}."
+    except Exception:
+        logger.exception("Failed to close tab by title")
+        return "Could not close the tab."
+
+
+@function_tool()
+async def close_all_tabs(context: RunContext) -> str:
+    try:
+        ctx = await _get_browser()
+        for page in ctx.pages:
+            await page.close()
+        logger.info("Closed all tabs")
+        return "All tabs closed."
+    except Exception:
+        logger.exception("Failed to close all tabs")
+        return "Could not close all tabs."
