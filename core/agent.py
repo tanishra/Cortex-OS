@@ -47,7 +47,11 @@ from tools import (
     scroll_page,
     search_on_page,
     go_back,
-    go_forward
+    go_forward,
+    close_current_tab,
+    close_all_tabs,
+    close_tab_by_index,
+    close_tab_by_title
 )
 
 from memory.memory_manager import MemoryManager
@@ -86,7 +90,11 @@ tools = [
     scroll_page,
     search_on_page,
     go_back,
-    go_forward
+    go_forward,
+    close_current_tab,
+    close_all_tabs,
+    close_tab_by_index,
+    close_tab_by_title
 ]
 
 
