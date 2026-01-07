@@ -40,7 +40,14 @@ from tools import (
     open_app,
     quit_app,
     focus_app,
-    list_apps
+    list_apps,
+    open_new_tab,
+    click_element,
+    switch_tab,
+    scroll_page,
+    search_on_page,
+    go_back,
+    go_forward
 )
 
 from memory.memory_manager import MemoryManager
@@ -72,7 +79,14 @@ tools = [
     open_app,
     focus_app,
     quit_app,
-    list_apps
+    list_apps,
+    open_new_tab,
+    click_element,
+    switch_tab,
+    scroll_page,
+    search_on_page,
+    go_back,
+    go_forward
 ]
 
 
