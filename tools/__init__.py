@@ -17,11 +17,15 @@ from tools.registry import (
     search_youtube,
     search_google,
     open_github,
-    open_stackoverflow
+    open_stackoverflow,
+    open_app,
+    list_apps,
+    focus_app,
+    quit_app
 )
 
 __all__ = [
     "search", "get_weather", "send_email",
     "open_file", "list_directory", "create_folder", "delete_path", "run_command","scrape_page","read_file","write_file","copy_file","move_file","delete_file",
-    "open_url","search_youtube","search_google","open_github","open_stackoverflow"
+    "open_url","search_youtube","search_google","open_github","open_stackoverflow","open_app","list_apps","focus_app","quit_app"
 ]
