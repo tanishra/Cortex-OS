@@ -36,7 +36,11 @@ from tools import (
     search_youtube,
     search_google,
     open_github,
-    open_stackoverflow
+    open_stackoverflow,
+    open_app,
+    quit_app,
+    focus_app,
+    list_apps
 )
 
 from memory.memory_manager import MemoryManager
@@ -64,7 +68,11 @@ tools = [
     search_youtube,
     search_google,
     open_github,
-    open_stackoverflow
+    open_stackoverflow,
+    open_app,
+    focus_app,
+    quit_app,
+    list_apps
 ]
 
 
