@@ -51,7 +51,9 @@ from tools import (
     close_current_tab,
     close_all_tabs,
     close_tab_by_index,
-    close_tab_by_title
+    close_tab_by_title,
+    submit_search,
+    smart_click
 )
 
 from memory.memory_manager import MemoryManager
@@ -94,7 +96,9 @@ tools = [
     close_current_tab,
     close_all_tabs,
     close_tab_by_index,
-    close_tab_by_title
+    close_tab_by_title,
+    smart_click,
+    submit_search
 ]
 
 
