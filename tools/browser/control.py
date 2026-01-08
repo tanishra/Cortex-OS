@@ -317,39 +317,43 @@ async def smart_click(context: RunContext, intent: str) -> str:
     and role-based elements) on the active page. It attempts to match the
     provided intent string against accessible labels such as aria-label,
     placeholder text, or visible inner text.
-
-    Args:
-        context (RunContext): The runtime context provided by the agent framework.
-        intent (str): A descriptive keyword or phrase indicating the desired
-            clickable element (e.g., "search", "submit", "login").
-
-    Returns:
-        str: A confirmation message if an element was successfully clicked,
-        or a message indicating that no suitable element could be found.
     """
     try:
         ctx = await _get_browser()
         page = ctx.pages[-1]
+        intent_lc = intent.lower()
 
-        # Try aria-label, role, placeholder, name
-        candidates = await page.query_selector_all(
+        # Use locators instead of ElementHandles (DOM-safe)
+        locator = page.locator(
             "input, button, a, div[role='button'], span"
         )
 
-        for el in candidates:
-            label = (
-                (await el.get_attribute("aria-label") or "") +
-                (await el.get_attribute("placeholder") or "") +
-                (await el.inner_text() or "")
-            ).lower()
+        count = await locator.count()
 
-            if intent.lower() in label:
-                box = await el.bounding_box()
-                if box:
+        for i in range(count):
+            el = locator.nth(i)
+
+            try:
+                label = (
+                    ((await el.get_attribute("aria-label")) or "") +
+                    ((await el.get_attribute("placeholder")) or "") +
+                    ((await el.inner_text()) or "")
+                ).lower()
+
+                if intent_lc in label:
+                    # Ensure element is stable and visible
                     await el.scroll_into_view_if_needed()
-                    await el.click()
+                    await el.wait_for(state="visible", timeout=3000)
+
+                    # Click safely (handles DOM re-renders)
+                    await el.click(timeout=5000)
+
                     logger.info(f"Smart clicked element for intent: {intent}")
                     return f"Clicked {intent}"
+
+            except Exception:
+                # Ignore transient DOM failures and continue scanning
+                continue
 
         return f"Could not locate clickable element related to {intent}"
 
