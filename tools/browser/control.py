@@ -1,6 +1,7 @@
 import logging
 from playwright.async_api import async_playwright
 from livekit.agents import function_tool, RunContext
+from urllib.parse import urlparse
 
 logger = logging.getLogger("JARVIS.Browser")
 
@@ -32,9 +33,22 @@ async def open_new_tab(context: RunContext, url: str) -> str:
     """
 
     try:
+        if not url or not url.strip():
+            return "No website specified."
+
+        url = url.strip()
+
+        if not url.startswith("http"):
+            url = "https://" + url
+
+        parsed = urlparse(url)
+        if not parsed.netloc:
+            logger.error(f"Invalid URL received: {url}")
+            return f"Invalid website: {url}"
+        
         ctx = await _get_browser()
         page = await ctx.new_page()
-        await page.goto(url)
+        await page.goto(url,timeout=15000)
         logger.info(f"Opened new tab: {url}")
         return f"Opened {url}"
     except Exception:
