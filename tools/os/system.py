@@ -10,9 +10,9 @@ logger = logging.getLogger("JARVIS.OS")
 HOME = str(Path.home())
 
 COMMON_PATHS = {
-    "desktop": f"{HOME}/Desktop",
-    "downloads": f"{HOME}/Downloads",
-    "documents": f"{HOME}/Documents",
+    "desktop": str(Path.home() / "Desktop"),
+    "downloads": str(Path.home() / "Downloads"),
+    "documents": str(Path.home() / "Documents"),
 }
 
 
@@ -31,6 +31,14 @@ def _resolve_path(path: str) -> str:
         str: The resolved absolute path.
     """
 
+    home = str(Path.home())
+
+    if "yourusername" in path.lower():
+        return path.lower().replace("/users/yourusername", home)
+
+    if "your_username" in path.lower():
+        return path.lower().replace("/users/your_username", home)
+    
     key = path.lower().strip()
     return COMMON_PATHS.get(key, os.path.expanduser(path))
 
