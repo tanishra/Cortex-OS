@@ -18,6 +18,14 @@ def _resolve_path(path: str) -> Path:
         Path: The resolved absolute path as a `Path` object.
     """
 
+    home = str(Path.home())
+
+    if "yourusername" in path.lower():
+        return path.lower().replace("/users/yourusername", home)
+
+    if "your_username" in path.lower():
+        return path.lower().replace("/users/your_username", home)
+
     path = os.path.expanduser(path)
     return Path(path).resolve()
 
