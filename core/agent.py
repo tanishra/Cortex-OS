@@ -7,6 +7,7 @@ from livekit.agents import AgentServer, AgentSession, Agent, room_io, ChatContex
 from livekit.plugins import (
     openai,
     noise_cancellation,
+    # anam
 )
 
 from mcp_client import MCPServerSse
@@ -57,6 +58,9 @@ from tools import (
 )
 
 from memory.memory_manager import MemoryManager
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 setup_logging()
@@ -128,6 +132,14 @@ async def my_agent(ctx: agents.JobContext):
 
     session = AgentSession()
 
+    # avatar = anam.AvatarSession(
+    #     persona_config=anam.PersonaConfig(
+    #         name="Mia",
+    #         avatarId="edf6fdcb-acab-44b8-b974-ded72665ee26",
+    #     ),
+    #     api_key=os.getenv("ANAM_API_KEY"),
+    # )
+
     user_name = "Tanish"  # TODO: replace with ctx.participant.identity in prod
     initial_ctx = ChatContext()
 
@@ -152,6 +164,7 @@ async def my_agent(ctx: agents.JobContext):
     )
 
     try:
+        # await avatar.start(session, room=ctx.room)
         await session.start(
             room=ctx.room,
             agent=agent,
