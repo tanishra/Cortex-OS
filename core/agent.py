@@ -184,17 +184,17 @@ async def my_agent(ctx: agents.JobContext):
         )
         logger.info("Initial session prompt delivered")
 
-        chat_ctx = agent.chat_ctx
-
-        ctx.add_shutdown_callback(
-            lambda: asyncio.create_task(
-                memory_manager.save_chat_context(
-                    user_id=user_name,
-                    chat_ctx=chat_ctx,
-                    injected_memory_str=memory_str,
+        async def shutdown_hook():
+            logger.info("Shutting down, saving chat context to memory")
+            chat_ctx = agent.chat_ctx
+            await memory_manager.save_chat_context(
+                user_id=user_name,
+                chat_ctx=chat_ctx,
+                injected_memory_str=memory_str,
                 )
-            )
-        )
+            logger.info("Chat context saved to memory")
+
+        ctx.add_shutdown_callback(shutdown_hook)
 
     except Exception as e:
         logger.exception("Fatal error in RTC session", exc_info=e)
