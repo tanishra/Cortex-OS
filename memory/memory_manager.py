@@ -1,7 +1,6 @@
 import json
 import logging
 from typing import Optional, List, Dict
-
 from livekit.agents import ChatContext
 from mem0 import AsyncMemoryClient
 from dotenv import load_dotenv
@@ -9,7 +8,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger("MemoryManager")
-
 
 class MemoryManager:
     """
@@ -55,13 +53,9 @@ class MemoryManager:
 
             memory_str = json.dumps(memories, indent=2)
 
-            chat_ctx.add_message(
-                role="assistant",
-                content=(
-                    f"The user's name is {user_id} and this is relevant context "
-                    f"about him:\n{memory_str}"
-                ),
-            )
+            # Inject memory individually as separate messages
+            for memory_item in memories:
+                chat_ctx.add_message(role="assistant", content=memory_item["memory"])
 
             logger.info(
                 "Injected %d memory items into chat context for user_id=%s",
@@ -83,7 +77,6 @@ class MemoryManager:
             chat_ctx: ChatContext,
             injected_memory_str: str,
         ) -> None:
-    
         """
         Persists relevant chat messages to memory,
         excluding injected memory context.
