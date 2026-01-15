@@ -7,6 +7,7 @@ from livekit.agents import AgentServer, AgentSession, Agent, room_io, ChatContex
 from livekit.plugins import (
     openai,
     noise_cancellation,
+    deepgram
     # anam
 )
 
@@ -114,9 +115,10 @@ class Assistant(Agent):
             llm=openai.realtime.RealtimeModel(
                 api_key=settings.openai.api_key,
                 model=settings.openai.model,
-                voice="marin",
+                modalities=['text'],
                 temperature=0.1,
             ),
+            tts=deepgram.TTS(model="aura-2-callista-en"),
             tools=tools,
             chat_ctx=chat_ctx,
         )
