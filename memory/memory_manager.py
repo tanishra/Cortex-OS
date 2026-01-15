@@ -4,6 +4,9 @@ from typing import Optional, List, Dict
 
 from livekit.agents import ChatContext
 from mem0 import AsyncMemoryClient
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger("MemoryManager")
 
