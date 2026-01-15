@@ -140,7 +140,7 @@ async def my_agent(ctx: agents.JobContext):
     #     api_key=os.getenv("ANAM_API_KEY"),
     # )
 
-    user_name = "Tanish"  # TODO: replace with ctx.participant.identity in prod
+    user_name = "tanish"  # TODO: replace with ctx.participant.identity in prod
     initial_ctx = ChatContext()
 
     memory_manager = MemoryManager()
