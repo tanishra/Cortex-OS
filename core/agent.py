@@ -7,8 +7,8 @@ from livekit.agents import AgentServer, AgentSession, Agent, room_io, ChatContex
 from livekit.plugins import (
     openai,
     noise_cancellation,
-    deepgram
-    # anam
+    deepgram,
+    anam
 )
 
 from mcp_client import MCPServerSse
@@ -134,13 +134,13 @@ async def my_agent(ctx: agents.JobContext):
 
     session = AgentSession()
 
-    # avatar = anam.AvatarSession(
-    #     persona_config=anam.PersonaConfig(
-    #         name="Mia",
-    #         avatarId="edf6fdcb-acab-44b8-b974-ded72665ee26",
-    #     ),
-    #     api_key=os.getenv("ANAM_API_KEY"),
-    # )
+    avatar = anam.AvatarSession(
+        persona_config=anam.PersonaConfig(
+            name="Mia",
+            avatarId="edf6fdcb-acab-44b8-b974-ded72665ee26",
+        ),
+        api_key=os.getenv("ANAM_API_KEY"),
+    )
 
     user_name = "tanish"  # TODO: replace with ctx.participant.identity in prod
     initial_ctx = ChatContext()
@@ -166,7 +166,8 @@ async def my_agent(ctx: agents.JobContext):
     )
 
     try:
-        # await avatar.start(session, room=ctx.room)
+        await avatar.start(session, room=ctx.room)
+        
         await session.start(
             room=ctx.room,
             agent=agent,
