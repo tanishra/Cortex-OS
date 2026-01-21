@@ -108,7 +108,7 @@ tools = [
 
 
 class Assistant(Agent):
-    def __init__(self, chat_ctx=None) -> None:
+    def __init__(self, chat_ctx=None,memory_manager=None,user_id=None) -> None:
         logger.info("Initializing Assistant agent")
         super().__init__(
             instructions=SYSTEM_PROMPT,
@@ -122,7 +122,29 @@ class Assistant(Agent):
             tools=tools,
             chat_ctx=chat_ctx,
         )
+        self.memory_manager=memory_manager,
+        self.user_id=user_id
         logger.info("Assistant initialized successfully")
+    
+    async def on_user_turn_completed(self, turn_ctx, new_message):
+        """Save memory after each user turn"""
+        if self.memory_manager and self.user_id:
+            try:
+                custom_instructions = """
+                Only extract important preferences, facts, and explicit requests to remember.
+                Ignore greetings, small talk, and casual conversation.
+                """
+                
+                # Save the user message to Mem0
+                await self.memory_manager.mem0.add(
+                    [{"role": "user", "content": new_message.text_content}],
+                    user_id=self.user_id
+                )
+                logger.info(f"Saved user message to memory: {new_message.text_content[:50]}...")
+            except Exception as e:
+                logger.error(f"Failed to save memory: {e}")
+        
+        await super().on_user_turn_completed(turn_ctx, new_message)
 
 
 server = AgentServer()
@@ -186,18 +208,6 @@ async def my_agent(ctx: agents.JobContext):
             instructions=SESSION_PROMPT,
         )
         logger.info("Initial session prompt delivered")
-
-        async def shutdown_hook():
-            logger.info("Shutting down, saving chat context to memory")
-            chat_ctx = agent.chat_ctx
-            await memory_manager.save_chat_context(
-                user_id=user_name,
-                chat_ctx=chat_ctx,
-                injected_memory_str=memory_str,
-                )
-            logger.info("Chat context saved to memory")
-
-        ctx.add_shutdown_callback(shutdown_hook)
 
     except Exception as e:
         logger.exception("Fatal error in RTC session", exc_info=e)
