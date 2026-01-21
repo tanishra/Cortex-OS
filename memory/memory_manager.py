@@ -3,7 +3,7 @@ import logging
 from typing import Optional, List, Dict
 from livekit.agents import ChatContext
 from mem0 import AsyncMemoryClient
-from config.prompts import MEM0_PROMPT
+from prompts.mem0_prompt import MEM0_PROMPT
 from dotenv import load_dotenv
 
 load_dotenv()
