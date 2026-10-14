@@ -24,7 +24,8 @@ def _to_response(row: ApprovalRow) -> ApprovalResponse:
 
 @router.get("", response_model=list[ApprovalResponse])
 async def list_approvals(pending: bool = True) -> list[ApprovalResponse]:
-    return [_to_response(r) for r in db.list_approvals("pending" if pending else None)]
+    rows = await db.arun(db.list_approvals, "pending" if pending else None)
+    return [_to_response(r) for r in rows]
 
 
 @router.post(
@@ -35,7 +36,9 @@ async def list_approvals(pending: bool = True) -> list[ApprovalResponse]:
 async def respond_approval(
     approval_id: str, decision: ApprovalDecision, request: Request
 ) -> ApprovalResponse:
-    row = db.resolve_approval(approval_id, "approved" if decision.approve else "denied")
+    row = await db.arun(
+        db.resolve_approval, approval_id, "approved" if decision.approve else "denied"
+    )
     if not row:
         raise HTTPException(status_code=404, detail="approval not found or already resolved")
     queue = request.app.state.queue

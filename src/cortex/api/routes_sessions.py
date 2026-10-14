@@ -31,15 +31,16 @@ def _cred_response(row: CredentialRow) -> CredentialResponse:
 
 @router.post("", response_model=SessionResponse, status_code=201)
 async def create_session(req: SessionCreate) -> SessionResponse:
-    existing = db.get_session_by_name(req.name)
+    existing = await db.arun(db.get_session_by_name, req.name)
     if existing:
         raise HTTPException(status_code=409, detail="session name already exists")
-    return _to_response(db.create_session(req.name))
+    return _to_response(await db.arun(db.create_session, req.name))
 
 
 @router.get("", response_model=list[SessionResponse])
 async def list_sessions() -> list[SessionResponse]:
-    return [_to_response(r) for r in db.list_sessions()]
+    rows = await db.arun(db.list_sessions)
+    return [_to_response(r) for r in rows]
 
 
 @router.get(
@@ -48,7 +49,7 @@ async def list_sessions() -> list[SessionResponse]:
     responses={404: {"model": ErrorResponse}},
 )
 async def get_session(session_id: str) -> SessionResponse:
-    row = db.get_session(session_id)
+    row = await db.arun(db.get_session, session_id)
     if not row:
         raise HTTPException(status_code=404, detail="session not found")
     return _to_response(row)
@@ -56,7 +57,7 @@ async def get_session(session_id: str) -> SessionResponse:
 
 @router.delete("/{session_id}", status_code=204, responses={404: {"model": ErrorResponse}})
 async def delete_session(session_id: str) -> None:
-    if not db.delete_session(session_id):
+    if not await db.arun(db.delete_session, session_id):
         raise HTTPException(status_code=404, detail="session not found")
 
 
@@ -67,7 +68,7 @@ async def delete_session(session_id: str) -> None:
 )
 async def open_session(session_id: str, request: Request) -> dict:
     """Open a headed browser on this session's profile so a human can log in."""
-    if not db.get_session(session_id):
+    if not await db.arun(db.get_session, session_id):
         raise HTTPException(status_code=404, detail="session not found")
     queue = request.app.state.queue
     if not await queue.enqueue("open_session_job", session_id):
@@ -81,10 +82,10 @@ async def open_session(session_id: str, request: Request) -> dict:
     responses={404: {"model": ErrorResponse}},
 )
 async def close_session(session_id: str) -> dict:
-    row = db.get_session(session_id)
+    row = await db.arun(db.get_session, session_id)
     if not row:
         raise HTTPException(status_code=404, detail="session not found")
-    db.update_session(session_id, close_requested=True)
+    await db.arun(db.update_session, session_id, close_requested=True)
     return {"status": "closing", "session_id": session_id}
 
 
@@ -98,10 +99,12 @@ async def close_session(session_id: str) -> dict:
     responses={404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
 )
 async def add_credentials(session_id: str, req: CredentialRequest) -> CredentialResponse:
-    if not db.get_session(session_id):
+    if not await db.arun(db.get_session, session_id):
         raise HTTPException(status_code=404, detail="session not found")
     try:
-        row = credentials.store_credentials(session_id, req.domain, req.fields)
+        row = await db.arun(
+            credentials.store_credentials, session_id, req.domain, req.fields
+        )
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
     return _cred_response(row)
@@ -109,9 +112,10 @@ async def add_credentials(session_id: str, req: CredentialRequest) -> Credential
 
 @router.get("/{session_id}/credentials", response_model=list[CredentialResponse])
 async def list_credentials(session_id: str) -> list[CredentialResponse]:
-    if not db.get_session(session_id):
+    if not await db.arun(db.get_session, session_id):
         raise HTTPException(status_code=404, detail="session not found")
-    return [_cred_response(r) for r in db.get_credentials_for_session(session_id)]
+    rows = await db.arun(db.get_credentials_for_session, session_id)
+    return [_cred_response(r) for r in rows]
 
 
 @router.delete(
@@ -120,5 +124,5 @@ async def list_credentials(session_id: str) -> list[CredentialResponse]:
     responses={404: {"model": ErrorResponse}},
 )
 async def delete_credential(session_id: str, domain: str) -> None:
-    if not credentials.delete_credentials(session_id, domain):
+    if not await db.arun(credentials.delete_credentials, session_id, domain):
         raise HTTPException(status_code=404, detail="credential not found")

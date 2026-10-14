@@ -30,7 +30,7 @@ def _to_response(row: TaskRow) -> TaskResponse:
     responses={400: {"model": ErrorResponse}},
 )
 async def create_task(req: TaskRequest, request: Request) -> TaskResponse:
-    row, created = db.create_task(req)
+    row, created = await db.arun(db.create_task, req)
     if created:
         queue = request.app.state.queue
         if await queue.enqueue("run_task_job", row.id):
@@ -42,12 +42,13 @@ async def create_task(req: TaskRequest, request: Request) -> TaskResponse:
 
 @router.get("", response_model=list[TaskResponse])
 async def get_tasks(limit: int = 50, offset: int = 0) -> list[TaskResponse]:
-    return [_to_response(r) for r in db.list_tasks(limit=limit, offset=offset)]
+    rows = await db.arun(db.list_tasks, limit=limit, offset=offset)
+    return [_to_response(r) for r in rows]
 
 
 @router.get("/{task_id}", response_model=TaskResponse, responses={404: {"model": ErrorResponse}})
 async def get_task(task_id: str) -> TaskResponse:
-    row = db.get_task(task_id)
+    row = await db.arun(db.get_task, task_id)
     if not row:
         raise HTTPException(status_code=404, detail="task not found")
     return _to_response(row)
@@ -59,13 +60,18 @@ async def get_task(task_id: str) -> TaskResponse:
     responses={404: {"model": ErrorResponse}},
 )
 async def cancel_task(task_id: str) -> TaskResponse:
-    row = db.get_task(task_id)
+    row = await db.arun(db.get_task, task_id)
     if not row:
         raise HTTPException(status_code=404, detail="task not found")
     if row.status in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED):
         return _to_response(row)
     if row.status == TaskStatus.QUEUED:
-        row = db.update_task(task_id, status=TaskStatus.CANCELLED, error="cancelled before start")
+        row = await db.arun(
+            db.update_task,
+            task_id,
+            status=TaskStatus.CANCELLED,
+            error="cancelled before start",
+        )
     else:
-        row = db.request_cancel(task_id)
+        row = await db.arun(db.request_cancel, task_id)
     return _to_response(row)  # type: ignore[arg-type]
