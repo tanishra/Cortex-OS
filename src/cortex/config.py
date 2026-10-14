@@ -31,6 +31,12 @@ class Settings(BaseSettings):
 
     vault_fernet_key: str = ""  # P1 — credential vault
     human_notify_url: str = ""  # P2 — escalation webhook
+    session_open_timeout_s: int = 600  # max duration of a headed login browser
+
+    # pluggable backends (ports registry)
+    artifact_backend: str = "fs"
+    secrets_backend: str = "fernet"
+    queue_backend: str = "arq"
 
 
 settings = Settings()

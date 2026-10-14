@@ -38,10 +38,9 @@ async def respond_approval(
     row = db.resolve_approval(approval_id, "approved" if decision.approve else "denied")
     if not row:
         raise HTTPException(status_code=404, detail="approval not found or already resolved")
-    queue = request.app.state.arq
-    if queue is None:
+    queue = request.app.state.queue
+    if not await queue.enqueue("approval_response_job", row.task_id, decision.approve):
         raise HTTPException(status_code=503, detail="queue unavailable")
-    await queue.enqueue_job("approval_response_job", row.task_id, decision.approve)
     logger.info(
         "Approval %s for task %s: %s",
         approval_id,

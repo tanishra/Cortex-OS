@@ -32,9 +32,8 @@ def _to_response(row: TaskRow) -> TaskResponse:
 async def create_task(req: TaskRequest, request: Request) -> TaskResponse:
     row, created = db.create_task(req)
     if created:
-        queue = request.app.state.arq
-        if queue is not None:
-            await queue.enqueue_job("run_task_job", row.id)
+        queue = request.app.state.queue
+        if await queue.enqueue("run_task_job", row.id):
             logger.info("Enqueued task %s", row.id)
         else:
             logger.warning("No queue configured; task %s created but not enqueued", row.id)

@@ -69,10 +69,9 @@ async def open_session(session_id: str, request: Request) -> dict:
     """Open a headed browser on this session's profile so a human can log in."""
     if not db.get_session(session_id):
         raise HTTPException(status_code=404, detail="session not found")
-    queue = request.app.state.arq
-    if queue is None:
+    queue = request.app.state.queue
+    if not await queue.enqueue("open_session_job", session_id):
         raise HTTPException(status_code=503, detail="queue unavailable")
-    await queue.enqueue_job("open_session_job", session_id)
     return {"status": "opening", "session_id": session_id}
 
 

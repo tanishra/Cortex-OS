@@ -1,15 +1,16 @@
 import logging
 from contextlib import asynccontextmanager
 
-from arq import create_pool
-from arq.connections import RedisSettings
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+import cortex.store.queue  # noqa: F401 — registers the arq queue backend
 from cortex.api import routes_approvals, routes_artifacts, routes_sessions, routes_tasks
 from cortex.config import settings
 from cortex.logging import setup_logging
+from cortex.ports.registry import get_backend
 from cortex.store.db import init_db
+from cortex.store.queue import NullJobQueue
 
 setup_logging()
 logger = logging.getLogger("cortex.main")
@@ -18,15 +19,11 @@ logger = logging.getLogger("cortex.main")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    try:
-        app.state.arq = await create_pool(RedisSettings.from_dsn(settings.redis_url))
-        logger.info("Connected to Redis at %s", settings.redis_url)
-    except Exception:
-        logger.warning("Redis unavailable — tasks will be created but not enqueued")
-        app.state.arq = None
+    queue = get_backend("queue")
+    await queue.connect()
+    app.state.queue = queue if queue.available() else NullJobQueue()
     yield
-    if app.state.arq is not None:
-        await app.state.arq.aclose()
+    await app.state.queue.aclose()
 
 
 app = FastAPI(
@@ -64,4 +61,4 @@ async def health() -> dict:
 
 @app.get("/ready")
 async def ready() -> dict:
-    return {"status": "ready", "queue": app.state.arq is not None}
+    return {"status": "ready", "queue": app.state.queue.available()}

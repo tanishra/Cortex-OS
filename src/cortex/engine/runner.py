@@ -8,7 +8,7 @@ from browser_use import Agent, Browser, BrowserProfile, ChatOpenAI
 
 from cortex.config import settings
 from cortex.engine.prompts import SAFETY_EXTENSION
-from cortex.models import StepRecord, TaskStatus
+from cortex.models import StepRecord, TaskStatus, utcnow
 from cortex.store import artifacts, db
 from cortex.vault import credentials
 
@@ -41,9 +41,20 @@ def _host_matches(url: str, domains: list[str]) -> bool:
 
 async def run_task(task_id: str) -> None:
     """Execute one queued task end-to-end. Updates DB status and writes artifacts."""
-    row = db.get_task(task_id)
+    row = await db.arun(db.get_task, task_id)
     if not row:
         logger.error("run_task called for unknown task %s", task_id)
+        return
+
+    if row.session_id and not await db.arun(
+        db.try_lock_session, row.session_id, task_id
+    ):
+        await db.arun(
+            db.update_task,
+            task_id,
+            status=TaskStatus.FAILED,
+            error="session_in_use: browser profile is held by another task/session",
+        )
         return
 
     task_text = row.task
@@ -71,8 +82,8 @@ async def run_task(task_id: str) -> None:
 
     sensitive_data = None
     if row.session_id:
-        sensitive_data = credentials.sensitive_data_for(row.session_id)
-        db.update_session(row.session_id, last_used_at=db.utcnow())
+        sensitive_data = await db.arun(credentials.sensitive_data_for, row.session_id)
+        await db.arun(db.update_session, row.session_id, last_used_at=utcnow())
 
     async def on_step(browser_state, agent_output, step_n: int) -> None:
         url = browser_state.url or ""
@@ -81,22 +92,17 @@ async def run_task(task_id: str) -> None:
             logger.warning("Task %s: domain blocked at %s", task_id, url)
 
         # Human-in-the-loop gate: entering an approval domain pauses the
-        # agent and flips the task to waiting_approval until responded.
+        # agent once and flips the task to waiting_approval until responded.
         if (
             approval_domains
             and _host_matches(url, approval_domains)
             and not state["domain_blocked"]
+            and await db.arun(db.pending_approval_for_task, task_id) is None
         ):
-            pending = [
-                a
-                for a in db.list_approvals("pending")
-                if a.task_id == task_id and a.url == url
-            ]
-            if not pending:
-                db.create_approval(task_id, "agent entered gated domain", url)
-                db.update_task(task_id, status=TaskStatus.WAITING_APPROVAL)
-                agent_holder["agent"].pause()
-                logger.info("Task %s: approval requested for %s", task_id, url)
+            await db.arun(db.create_approval, task_id, "agent entered gated domain", url)
+            await db.arun(db.update_task, task_id, status=TaskStatus.WAITING_APPROVAL)
+            agent_holder["agent"].pause()
+            logger.info("Task %s: approval requested for %s", task_id, url)
 
         step = StepRecord(
             n=step_n,
@@ -108,24 +114,21 @@ async def run_task(task_id: str) -> None:
             next_goal=getattr(agent_output, "next_goal", None),
             errors=list(getattr(browser_state, "browser_errors", []) or []),
         )
-        artifacts.write_step(task_id, step, getattr(browser_state, "screenshot", None))
-        db.update_task(task_id, steps_taken=step_n)
+        await db.arun(
+            artifacts.write_step,
+            task_id,
+            step,
+            getattr(browser_state, "screenshot", None),
+        )
+        await db.arun(db.update_task, task_id, steps_taken=step_n)
 
     async def on_done(history) -> None:
         logger.info("Task %s done callback: %d steps", task_id, len(history.agent_steps()))
 
     async def should_stop() -> bool:
-        if state["domain_blocked"] or db.is_cancel_requested(task_id):
+        if state["domain_blocked"] or await db.arun(db.is_cancel_requested, task_id):
             return True
-        approval = next(
-            (
-                a
-                for a in db.list_approvals("denied")
-                if a.task_id == task_id
-            ),
-            None,
-        )
-        return approval is not None
+        return await db.arun(db.has_denied_approval, task_id)
 
     agent = Agent(
         task=task_text,
@@ -144,37 +147,46 @@ async def run_task(task_id: str) -> None:
     agent_holder["agent"] = agent
     _RUNNING[task_id] = agent
 
-    db.update_task(task_id, status=TaskStatus.RUNNING)
+    await db.arun(db.update_task, task_id, status=TaskStatus.RUNNING)
 
     try:
         history = await agent.run(max_steps=row.max_steps or settings.max_steps)
 
         if state["domain_blocked"]:
-            db.update_task(
+            await db.arun(
+                db.update_task,
                 task_id,
                 status=TaskStatus.FAILED,
                 error="domain_blocked: agent navigated outside allowed_domains",
             )
             return
 
-        if db.is_cancel_requested(task_id):
-            db.update_task(task_id, status=TaskStatus.CANCELLED, error="cancelled by user")
+        if await db.arun(db.is_cancel_requested, task_id):
+            await db.arun(
+                db.update_task,
+                task_id,
+                status=TaskStatus.CANCELLED,
+                error="cancelled by user",
+            )
             return
 
-        if get_task_status(task_id) == TaskStatus.WAITING_APPROVAL:
-            denied = any(
-                a.status == "denied"
-                for a in db.list_approvals(status=None)
-                if a.task_id == task_id
+        if await db.arun(db.has_denied_approval, task_id):
+            await db.arun(
+                db.update_task,
+                task_id,
+                status=TaskStatus.CANCELLED,
+                error="approval denied",
             )
-            if denied:
-                db.update_task(task_id, status=TaskStatus.CANCELLED, error="approval denied")
-                return
-            db.update_task(task_id, status=TaskStatus.RUNNING)
+            return
+
+        current = await db.arun(db.get_task, task_id)
+        if current and current.status == TaskStatus.WAITING_APPROVAL:
+            await db.arun(db.update_task, task_id, status=TaskStatus.RUNNING)
 
         final = history.final_result()
         success = history.is_successful()
-        db.update_task(
+        await db.arun(
+            db.update_task,
             task_id,
             status=TaskStatus.DONE if success else TaskStatus.FAILED,
             result=str(final) if final is not None else None,
@@ -189,15 +201,17 @@ async def run_task(task_id: str) -> None:
 
     except Exception as exc:
         logger.exception("Task %s crashed", task_id)
-        db.update_task(task_id, status=TaskStatus.FAILED, error=f"{type(exc).__name__}: {exc}")
+        await db.arun(
+            db.update_task,
+            task_id,
+            status=TaskStatus.FAILED,
+            error=f"{type(exc).__name__}: {exc}",
+        )
     finally:
         _RUNNING.pop(task_id, None)
+        if row.session_id:
+            await db.arun(db.unlock_session, row.session_id)
         try:
             await browser.kill()
         except Exception:
-            pass
-
-
-def get_task_status(task_id: str) -> TaskStatus | None:
-    row = db.get_task(task_id)
-    return TaskStatus(row.status) if row else None
+            logger.warning("Task %s: browser cleanup failed", task_id, exc_info=True)
