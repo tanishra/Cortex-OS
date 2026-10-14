@@ -10,8 +10,16 @@ from cortex.config import settings
 from cortex.engine.prompts import SAFETY_EXTENSION
 from cortex.models import StepRecord, TaskStatus
 from cortex.store import artifacts, db
+from cortex.vault import credentials
 
 logger = logging.getLogger("cortex.engine")
+
+# Task_id -> Agent for in-process pause/resume/stop (worker process only).
+_RUNNING: dict[str, Agent] = {}
+
+
+def running_agent(task_id: str) -> Agent | None:
+    return _RUNNING.get(task_id)
 
 
 def _action_names(output) -> list[str]:
@@ -26,11 +34,9 @@ def _action_names(output) -> list[str]:
     return names
 
 
-def _host_allowed(url: str, allowed: list[str]) -> bool:
-    if not allowed:
-        return True
+def _host_matches(url: str, domains: list[str]) -> bool:
     host = (urlparse(url).hostname or "").lower()
-    return any(host == d or host.endswith("." + d) for d in allowed)
+    return any(host == d or host.endswith("." + d) for d in domains)
 
 
 async def run_task(task_id: str) -> None:
@@ -45,6 +51,7 @@ async def run_task(task_id: str) -> None:
         task_text = f"Start by navigating to {row.start_url}.\n\nTask: {row.task}"
 
     allowed_domains = json.loads(row.allowed_domains_json or "[]")
+    approval_domains = json.loads(row.approval_domains_json or "[]")
     headless = row.headless if row.headless is not None else settings.browser_headless
 
     profile_dir = settings.browser_profiles_dir / (row.session_id or task_id)
@@ -62,15 +69,38 @@ async def run_task(task_id: str) -> None:
         )
     )
 
+    sensitive_data = None
+    if row.session_id:
+        sensitive_data = credentials.sensitive_data_for(row.session_id)
+        db.update_session(row.session_id, last_used_at=db.utcnow())
+
     async def on_step(browser_state, agent_output, step_n: int) -> None:
-        host_ok = _host_allowed(browser_state.url or "", allowed_domains)
-        if not host_ok:
+        url = browser_state.url or ""
+        if allowed_domains and not _host_matches(url, allowed_domains):
             state["domain_blocked"] = True
-            logger.warning("Task %s: domain blocked at %s", task_id, browser_state.url)
+            logger.warning("Task %s: domain blocked at %s", task_id, url)
+
+        # Human-in-the-loop gate: entering an approval domain pauses the
+        # agent and flips the task to waiting_approval until responded.
+        if (
+            approval_domains
+            and _host_matches(url, approval_domains)
+            and not state["domain_blocked"]
+        ):
+            pending = [
+                a
+                for a in db.list_approvals("pending")
+                if a.task_id == task_id and a.url == url
+            ]
+            if not pending:
+                db.create_approval(task_id, "agent entered gated domain", url)
+                db.update_task(task_id, status=TaskStatus.WAITING_APPROVAL)
+                agent_holder["agent"].pause()
+                logger.info("Task %s: approval requested for %s", task_id, url)
 
         step = StepRecord(
             n=step_n,
-            url=browser_state.url or "",
+            url=url,
             title=browser_state.title or "",
             actions=_action_names(agent_output),
             evaluation=getattr(agent_output, "evaluation_previous_goal", None),
@@ -85,12 +115,23 @@ async def run_task(task_id: str) -> None:
         logger.info("Task %s done callback: %d steps", task_id, len(history.agent_steps()))
 
     async def should_stop() -> bool:
-        return state["domain_blocked"] or db.is_cancel_requested(task_id)
+        if state["domain_blocked"] or db.is_cancel_requested(task_id):
+            return True
+        approval = next(
+            (
+                a
+                for a in db.list_approvals("denied")
+                if a.task_id == task_id
+            ),
+            None,
+        )
+        return approval is not None
 
     agent = Agent(
         task=task_text,
         llm=llm,
         browser=browser,
+        sensitive_data=sensitive_data,
         use_vision="auto",
         max_failures=5,
         step_timeout=settings.step_timeout_s,
@@ -101,6 +142,7 @@ async def run_task(task_id: str) -> None:
         task_id=task_id,
     )
     agent_holder["agent"] = agent
+    _RUNNING[task_id] = agent
 
     db.update_task(task_id, status=TaskStatus.RUNNING)
 
@@ -118,6 +160,17 @@ async def run_task(task_id: str) -> None:
         if db.is_cancel_requested(task_id):
             db.update_task(task_id, status=TaskStatus.CANCELLED, error="cancelled by user")
             return
+
+        if get_task_status(task_id) == TaskStatus.WAITING_APPROVAL:
+            denied = any(
+                a.status == "denied"
+                for a in db.list_approvals(status=None)
+                if a.task_id == task_id
+            )
+            if denied:
+                db.update_task(task_id, status=TaskStatus.CANCELLED, error="approval denied")
+                return
+            db.update_task(task_id, status=TaskStatus.RUNNING)
 
         final = history.final_result()
         success = history.is_successful()
@@ -138,7 +191,13 @@ async def run_task(task_id: str) -> None:
         logger.exception("Task %s crashed", task_id)
         db.update_task(task_id, status=TaskStatus.FAILED, error=f"{type(exc).__name__}: {exc}")
     finally:
+        _RUNNING.pop(task_id, None)
         try:
             await browser.kill()
         except Exception:
             pass
+
+
+def get_task_status(task_id: str) -> TaskStatus | None:
+    row = db.get_task(task_id)
+    return TaskStatus(row.status) if row else None

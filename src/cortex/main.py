@@ -3,9 +3,10 @@ from contextlib import asynccontextmanager
 
 from arq import create_pool
 from arq.connections import RedisSettings
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
-from cortex.api import routes_artifacts, routes_tasks
+from cortex.api import routes_approvals, routes_artifacts, routes_sessions, routes_tasks
 from cortex.config import settings
 from cortex.logging import setup_logging
 from cortex.store.db import init_db
@@ -25,7 +26,7 @@ async def lifespan(app: FastAPI):
         app.state.arq = None
     yield
     if app.state.arq is not None:
-        await app.state.arq.close()
+        await app.state.arq.aclose()
 
 
 app = FastAPI(
@@ -40,6 +41,20 @@ app = FastAPI(
 
 app.include_router(routes_tasks.router)
 app.include_router(routes_artifacts.router)
+app.include_router(routes_sessions.router)
+app.include_router(routes_approvals.router)
+
+PUBLIC_PATHS = {"/health", "/ready", "/docs", "/openapi.json", "/redoc"}
+
+
+@app.middleware("http")
+async def api_key_auth(request: Request, call_next):
+    """Optional API-key gate. Enabled via REQUIRE_API_KEY=true + API_KEYS list."""
+    if settings.require_api_key and request.url.path not in PUBLIC_PATHS:
+        keys = {k.strip() for k in settings.api_keys.split(",") if k.strip()}
+        if request.headers.get("x-api-key") not in keys:
+            return JSONResponse(status_code=401, content={"detail": "invalid api key"})
+    return await call_next(request)
 
 
 @app.get("/health")

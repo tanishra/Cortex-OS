@@ -4,10 +4,13 @@ import asyncio
 import logging
 
 from arq.connections import RedisSettings
+from browser_use import Browser, BrowserProfile
 
 from cortex.config import settings
-from cortex.engine.runner import run_task
+from cortex.engine.runner import run_task, running_agent
 from cortex.logging import setup_logging
+from cortex.models import TaskStatus
+from cortex.store import db
 from cortex.store.db import init_db
 
 setup_logging()
@@ -20,14 +23,54 @@ async def run_task_job(ctx: dict, task_id: str) -> None:
         await asyncio.wait_for(run_task(task_id), timeout=settings.task_timeout_s)
     except TimeoutError:
         logger.error("Task %s exceeded timeout of %ds", task_id, settings.task_timeout_s)
-        from cortex.models import TaskStatus
-        from cortex.store import db
-
         db.update_task(
             task_id,
             status=TaskStatus.FAILED,
             error=f"timeout: exceeded {settings.task_timeout_s}s",
         )
+
+
+async def approval_response_job(ctx: dict, task_id: str, approve: bool) -> None:
+    """Deliver an approve/deny decision to a paused agent in this worker."""
+    agent = running_agent(task_id)
+    if not agent:
+        logger.warning("No running agent for task %s; decision ignored", task_id)
+        return
+    if approve:
+        db.update_task(task_id, status=TaskStatus.RUNNING)
+        agent.resume()
+        logger.info("Task %s approved, resumed", task_id)
+    else:
+        agent.stop()
+        logger.info("Task %s denied, stopping", task_id)
+
+
+async def open_session_job(ctx: dict, session_id: str) -> None:
+    """Hold a headed browser open on a session profile for manual login.
+
+    Closes when POST /sessions/{id}/close sets close_requested.
+    """
+    session = db.get_session(session_id)
+    if not session:
+        return
+    profile_dir = settings.browser_profiles_dir / session_id
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    browser = Browser(
+        browser_profile=BrowserProfile(headless=False, user_data_dir=str(profile_dir))
+    )
+    try:
+        await browser.start()
+        logger.info("Session %s browser open for manual login", session_id)
+        # Polls a DB flag so /sessions/{id}/close can end the job cross-process.
+        while not (db.get_session(session_id) or session).close_requested:  # noqa: ASYNC110
+            await asyncio.sleep(1)
+    finally:
+        db.update_session(session_id, close_requested=False)
+        try:
+            await browser.kill()
+        except Exception:
+            pass
+        logger.info("Session %s browser closed", session_id)
 
 
 async def startup(ctx: dict) -> None:
@@ -36,7 +79,7 @@ async def startup(ctx: dict) -> None:
 
 
 class WorkerSettings:
-    functions = [run_task_job]
+    functions = [run_task_job, approval_response_job, open_session_job]
     on_startup = startup
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     max_jobs = settings.worker_concurrency
