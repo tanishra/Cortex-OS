@@ -26,6 +26,10 @@ class TaskRequest(BaseModel):
         default_factory=list,
         description="Pause for human approval whenever the agent is on one of these domains.",
     )
+    approval_actions: list[str] = Field(
+        default_factory=list,
+        description="browser-use action names requiring human approval before executing.",
+    )
     session_id: str | None = None
     max_steps: int | None = Field(default=None, ge=1, le=500)
     headless: bool | None = None
@@ -87,6 +91,7 @@ class ApprovalResponse(BaseModel):
     task_id: str
     reason: str
     url: str | None = None
+    details: str | None = None
     status: str
     created_at: datetime
     resolved_at: datetime | None = None

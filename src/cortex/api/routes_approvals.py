@@ -16,6 +16,7 @@ def _to_response(row: ApprovalRow) -> ApprovalResponse:
         task_id=row.task_id,
         reason=row.reason,
         url=row.url,
+        details=row.details,
         status=row.status,
         created_at=row.created_at,
         resolved_at=row.resolved_at,

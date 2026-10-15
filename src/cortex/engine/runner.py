@@ -8,6 +8,7 @@ from browser_use import Agent, Browser, BrowserProfile, ChatOpenAI
 
 from cortex.config import settings
 from cortex.engine.escalation import detect_human_wall
+from cortex.engine.gates import make_action_gate
 from cortex.engine.prompts import SAFETY_EXTENSION
 from cortex.models import StepRecord, TaskStatus, utcnow
 from cortex.notify import notify_human
@@ -65,12 +66,13 @@ async def run_task(task_id: str) -> None:
 
     allowed_domains = json.loads(row.allowed_domains_json or "[]")
     approval_domains = json.loads(row.approval_domains_json or "[]")
+    approval_actions = set(json.loads(row.approval_actions_json or "[]"))
     headless = row.headless if row.headless is not None else settings.browser_headless
 
     profile_dir = settings.browser_profiles_dir / (row.session_id or task_id)
     profile_dir.mkdir(parents=True, exist_ok=True)
 
-    state = {"domain_blocked": False}
+    state = {"domain_blocked": False, "current_url": row.start_url or ""}
     agent_holder: dict = {}
 
     llm = ChatOpenAI(model=settings.openai_model, api_key=settings.openai_api_key)
@@ -89,6 +91,7 @@ async def run_task(task_id: str) -> None:
 
     async def on_step(browser_state, agent_output, step_n: int) -> None:
         url = browser_state.url or ""
+        state["current_url"] = url
         if allowed_domains and not _host_matches(url, allowed_domains):
             state["domain_blocked"] = True
             logger.warning("Task %s: domain blocked at %s", task_id, url)
@@ -175,6 +178,15 @@ async def run_task(task_id: str) -> None:
     )
     agent_holder["agent"] = agent
     _RUNNING[task_id] = agent
+
+    if approval_actions:
+        agent.tools.act = make_action_gate(
+            task_id,
+            approval_actions,
+            agent.tools.act,
+            lambda: state["current_url"],
+        )
+        logger.info("Task %s: gating actions %s", task_id, sorted(approval_actions))
 
     await db.arun(db.update_task, task_id, status=TaskStatus.RUNNING)
 

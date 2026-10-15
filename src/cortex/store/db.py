@@ -27,6 +27,7 @@ class TaskRow(SQLModel, table=True):
     start_url: str | None = None
     allowed_domains_json: str = "[]"
     approval_domains_json: str = "[]"
+    approval_actions_json: str = "[]"
     session_id: str | None = None
     max_steps: int | None = None
     headless: bool | None = None
@@ -62,6 +63,7 @@ class ApprovalRow(SQLModel, table=True):
     task_id: str = Field(index=True)
     reason: str
     url: str | None = None
+    details: str | None = None  # JSON: gated action name + params
     status: str = "pending"  # pending | approved | denied
     created_at: datetime = Field(default_factory=utcnow)
     resolved_at: datetime | None = None
@@ -79,10 +81,37 @@ _MUTABLE_TASK_FIELDS = {
 _MUTABLE_SESSION_FIELDS = {"name", "close_requested", "locked_by", "last_used_at"}
 
 
+# Columns added after the initial schema — SQLite lacks CREATE IF NOT EXISTS
+# for columns, so these are applied idempotently via PRAGMA checks.
+_COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
+    "taskrow": {"approval_actions_json": "VARCHAR DEFAULT '[]' NOT NULL"},
+    "sessionrow": {"locked_by": "VARCHAR"},
+    "approvalrow": {"details": "VARCHAR"},
+}
+
+
+def _migrate_columns() -> None:
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(_ENGINE)
+    with _ENGINE.begin() as conn:
+        for table, columns in _COLUMN_MIGRATIONS.items():
+            if table not in inspector.get_table_names():
+                continue
+            existing = {c["name"] for c in inspector.get_columns(table)}
+            for col, ddl in columns.items():
+                if col not in existing:
+                    conn.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+                    )
+                    logger.info("Migrated %s.%s", table, col)
+
+
 def init_db() -> None:
     settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
     settings.browser_profiles_dir.mkdir(parents=True, exist_ok=True)
     SQLModel.metadata.create_all(_ENGINE)
+    _migrate_columns()
 
 
 async def arun(fn: Any, *args: Any, **kwargs: Any) -> Any:
@@ -108,6 +137,7 @@ def create_task(req: TaskRequest) -> tuple[TaskRow, bool]:
         start_url=req.start_url,
         allowed_domains_json=json.dumps(req.allowed_domains),
         approval_domains_json=json.dumps(req.approval_domains),
+        approval_actions_json=json.dumps(req.approval_actions),
         session_id=req.session_id,
         max_steps=req.max_steps,
         headless=req.headless,
@@ -313,13 +343,24 @@ def delete_credential(session_id: str, domain: str) -> bool:
 # --- approvals ---
 
 
-def create_approval(task_id: str, reason: str, url: str | None = None) -> ApprovalRow:
+def create_approval(
+    task_id: str,
+    reason: str,
+    url: str | None = None,
+    details: str | None = None,
+) -> ApprovalRow:
     with Session(_ENGINE) as s:
-        row = ApprovalRow(task_id=task_id, reason=reason, url=url)
+        row = ApprovalRow(task_id=task_id, reason=reason, url=url, details=details)
         s.add(row)
         s.commit()
         s.refresh(row)
         return row
+
+
+def get_approval_status(approval_id: str) -> str | None:
+    with Session(_ENGINE) as s:
+        row = s.get(ApprovalRow, approval_id)
+        return row.status if row else None
 
 
 def get_approval(approval_id: str) -> ApprovalRow | None:
