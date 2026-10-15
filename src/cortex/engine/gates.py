@@ -13,6 +13,7 @@ from typing import Any
 from browser_use.agent.views import ActionResult
 
 from cortex.models import TaskStatus
+from cortex.notify import notify_human
 from cortex.store import db
 
 logger = logging.getLogger("cortex.gates")
@@ -62,6 +63,9 @@ def make_action_gate(
                     task_id,
                     name,
                     approval.id,
+                )
+                asyncio.create_task(
+                    notify_human(task_id, get_url(), f"approval_action:{name}")
                 )
 
             # Wait for resolution; cancel flag is an escape hatch.

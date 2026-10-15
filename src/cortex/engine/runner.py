@@ -1,5 +1,6 @@
 """Engine: runs a browser-use Agent for one task row and records artifacts."""
 
+import asyncio
 import json
 import logging
 from urllib.parse import urlparse
@@ -108,6 +109,7 @@ async def run_task(task_id: str) -> None:
             await db.arun(db.update_task, task_id, status=TaskStatus.WAITING_APPROVAL)
             agent_holder["agent"].pause()
             logger.info("Task %s: approval requested for %s", task_id, url)
+            asyncio.create_task(notify_human(task_id, url, "approval_domain"))
 
         # Human escalation: CAPTCHA/2FA wall → pause + waiting_human + webhook.
         current = await db.arun(db.get_task, task_id)
@@ -115,6 +117,7 @@ async def run_task(task_id: str) -> None:
             try:
                 dom_text = browser_state.dom_state.llm_representation()
             except Exception:
+                logger.debug("Task %s: DOM serialization failed", task_id, exc_info=True)
                 dom_text = ""
             agent_text = " ".join(
                 filter(
@@ -134,7 +137,7 @@ async def run_task(task_id: str) -> None:
                 logger.warning(
                     "Task %s: human wall detected (%s) at %s", task_id, wall, url
                 )
-                await notify_human(task_id, url, wall)
+                asyncio.create_task(notify_human(task_id, url, wall))
 
         step = StepRecord(
             n=step_n,
