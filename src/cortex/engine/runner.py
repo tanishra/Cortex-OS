@@ -7,8 +7,10 @@ from urllib.parse import urlparse
 from browser_use import Agent, Browser, BrowserProfile, ChatOpenAI
 
 from cortex.config import settings
+from cortex.engine.escalation import detect_human_wall
 from cortex.engine.prompts import SAFETY_EXTENSION
 from cortex.models import StepRecord, TaskStatus, utcnow
+from cortex.notify import notify_human
 from cortex.store import artifacts, db
 from cortex.vault import credentials
 
@@ -104,6 +106,33 @@ async def run_task(task_id: str) -> None:
             agent_holder["agent"].pause()
             logger.info("Task %s: approval requested for %s", task_id, url)
 
+        # Human escalation: CAPTCHA/2FA wall → pause + waiting_human + webhook.
+        current = await db.arun(db.get_task, task_id)
+        if current and current.status != TaskStatus.WAITING_HUMAN:
+            try:
+                dom_text = browser_state.dom_state.llm_representation()
+            except Exception:
+                dom_text = ""
+            agent_text = " ".join(
+                filter(
+                    None,
+                    [
+                        getattr(agent_output, "evaluation_previous_goal", None),
+                        getattr(agent_output, "next_goal", None),
+                    ],
+                )
+            )
+            wall = detect_human_wall(
+                url, browser_state.title or "", f"{dom_text}\n{agent_text}"
+            )
+            if wall:
+                await db.arun(db.update_task, task_id, status=TaskStatus.WAITING_HUMAN)
+                agent_holder["agent"].pause()
+                logger.warning(
+                    "Task %s: human wall detected (%s) at %s", task_id, wall, url
+                )
+                await notify_human(task_id, url, wall)
+
         step = StepRecord(
             n=step_n,
             url=url,
@@ -180,7 +209,10 @@ async def run_task(task_id: str) -> None:
             return
 
         current = await db.arun(db.get_task, task_id)
-        if current and current.status == TaskStatus.WAITING_APPROVAL:
+        if current and current.status in (
+            TaskStatus.WAITING_APPROVAL,
+            TaskStatus.WAITING_HUMAN,
+        ):
             await db.arun(db.update_task, task_id, status=TaskStatus.RUNNING)
 
         final = history.final_result()

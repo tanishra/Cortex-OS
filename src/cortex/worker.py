@@ -47,6 +47,27 @@ async def approval_response_job(ctx: dict, task_id: str, approve: bool) -> None:
         logger.info("Task %s denied, stopping", task_id)
 
 
+async def human_resume_job(ctx: dict, task_id: str) -> None:
+    """Resume a task paused in waiting_human after the human intervened."""
+    task = await db.arun(db.get_task, task_id)
+    agent = running_agent(task_id)
+    if not task or task.status != TaskStatus.WAITING_HUMAN:
+        logger.info("Resume ignored: task %s not waiting_human", task_id)
+        return
+    if not agent:
+        logger.warning("No running agent for task %s; marking failed", task_id)
+        await db.arun(
+            db.update_task,
+            task_id,
+            status=TaskStatus.FAILED,
+            error="agent_unavailable: worker no longer holds the paused agent",
+        )
+        return
+    await db.arun(db.update_task, task_id, status=TaskStatus.RUNNING)
+    agent.resume()
+    logger.info("Task %s resumed by human", task_id)
+
+
 async def open_session_job(ctx: dict, session_id: str) -> None:
     """Hold a headed browser open on a session profile for manual login.
 
@@ -104,7 +125,12 @@ async def startup(ctx: dict) -> None:
 
 
 class WorkerSettings:
-    functions = [run_task_job, approval_response_job, open_session_job]
+    functions = [
+        run_task_job,
+        approval_response_job,
+        human_resume_job,
+        open_session_job,
+    ]
     on_startup = startup
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     max_jobs = settings.worker_concurrency

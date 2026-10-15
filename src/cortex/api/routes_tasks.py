@@ -75,3 +75,22 @@ async def cancel_task(task_id: str) -> TaskResponse:
     else:
         row = await db.arun(db.request_cancel, task_id)
     return _to_response(row)  # type: ignore[arg-type]
+
+
+@router.post(
+    "/{task_id}/resume",
+    response_model=TaskResponse,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+)
+async def resume_task(task_id: str, request: Request) -> TaskResponse:
+    """Resume a task paused in waiting_human after human intervention."""
+    row = await db.arun(db.get_task, task_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="task not found")
+    if row.status != TaskStatus.WAITING_HUMAN:
+        raise HTTPException(
+            status_code=409, detail=f"task is {row.status}, not waiting_human"
+        )
+    if not await request.app.state.queue.enqueue("human_resume_job", task_id):
+        raise HTTPException(status_code=503, detail="queue unavailable")
+    return _to_response(row)
