@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
@@ -46,6 +46,7 @@ class SessionRow(SQLModel, table=True):
     name: str = Field(index=True)
     close_requested: bool = False
     locked_by: str | None = None  # owner holding the browser profile
+    expires_at: datetime | None = None  # NULL = never expires (legacy rows)
     created_at: datetime = Field(default_factory=utcnow)
     last_used_at: datetime | None = None
 
@@ -78,14 +79,20 @@ _MUTABLE_TASK_FIELDS = {
     "steps_taken",
     "cancel_requested",
 }
-_MUTABLE_SESSION_FIELDS = {"name", "close_requested", "locked_by", "last_used_at"}
+_MUTABLE_SESSION_FIELDS = {
+    "name",
+    "close_requested",
+    "locked_by",
+    "last_used_at",
+    "expires_at",
+}
 
 
 # Columns added after the initial schema — SQLite lacks CREATE IF NOT EXISTS
 # for columns, so these are applied idempotently via PRAGMA checks.
 _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
     "taskrow": {"approval_actions_json": "VARCHAR DEFAULT '[]' NOT NULL"},
-    "sessionrow": {"locked_by": "VARCHAR"},
+    "sessionrow": {"locked_by": "VARCHAR", "expires_at": "DATETIME"},
     "approvalrow": {"details": "VARCHAR"},
 }
 
@@ -226,8 +233,12 @@ def fail_stale_tasks() -> int:
 
 
 def create_session(name: str) -> SessionRow:
+    from datetime import timedelta
+
     with Session(_ENGINE) as s:
-        row = SessionRow(name=name)
+        row = SessionRow(
+            name=name, expires_at=utcnow() + timedelta(seconds=settings.session_ttl_s)
+        )
         s.add(row)
         s.commit()
         s.refresh(row)
@@ -295,6 +306,58 @@ def delete_session(session_id: str) -> bool:
         s.delete(row)
         s.commit()
         return True
+
+
+def _as_aware(dt: datetime | None) -> datetime | None:
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt
+
+
+def is_session_expired(row: SessionRow) -> bool:
+    expires = _as_aware(row.expires_at)
+    return expires is not None and expires < utcnow()
+
+
+def delete_expired_sessions() -> list[str]:
+    """Delete expired session rows; returns their ids (for profile cleanup)."""
+    with Session(_ENGINE) as s:
+        expired = [
+            r
+            for r in s.exec(select(SessionRow)).all()
+            if is_session_expired(r) and r.locked_by is None
+        ]
+        ids = [r.id for r in expired]
+        for r in expired:
+            s.delete(r)
+        s.commit()
+        return ids
+
+
+def stale_task_profile_dirs() -> list[str]:
+    """Profile dir names belonging to terminal tasks older than 1 day."""
+    from datetime import timedelta
+
+    cutoff = utcnow() - timedelta(days=1)
+    with Session(_ENGINE) as s:
+        rows = s.exec(
+            select(TaskRow.id).where(
+                TaskRow.session_id.is_(None),  # type: ignore[attr-defined]
+                TaskRow.status.in_(TERMINAL_STATUSES),  # type: ignore[attr-defined]
+                TaskRow.updated_at < cutoff,
+            )
+        ).all()
+        return list(rows)
+
+
+def all_session_ids() -> set[str]:
+    with Session(_ENGINE) as s:
+        return set(s.exec(select(SessionRow.id)).all())
+
+
+def task_exists(task_id: str) -> bool:
+    with Session(_ENGINE) as s:
+        return s.get(TaskRow, task_id) is not None
 
 
 # --- credentials ---

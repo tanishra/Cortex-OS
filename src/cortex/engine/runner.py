@@ -50,16 +50,24 @@ async def run_task(task_id: str) -> None:
         logger.error("run_task called for unknown task %s", task_id)
         return
 
-    if row.session_id and not await db.arun(
-        db.try_lock_session, row.session_id, task_id
-    ):
-        await db.arun(
-            db.update_task,
-            task_id,
-            status=TaskStatus.FAILED,
-            error="session_in_use: browser profile is held by another task/session",
-        )
-        return
+    if row.session_id:
+        session = await db.arun(db.get_session, row.session_id)
+        if session and db.is_session_expired(session):
+            await db.arun(
+                db.update_task,
+                task_id,
+                status=TaskStatus.FAILED,
+                error="session_expired: session TTL elapsed",
+            )
+            return
+        if not await db.arun(db.try_lock_session, row.session_id, task_id):
+            await db.arun(
+                db.update_task,
+                task_id,
+                status=TaskStatus.FAILED,
+                error="session_in_use: browser profile is held by another task/session",
+            )
+            return
 
     task_text = row.task
     if row.start_url:

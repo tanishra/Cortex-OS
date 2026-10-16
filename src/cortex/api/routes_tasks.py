@@ -30,6 +30,12 @@ def _to_response(row: TaskRow) -> TaskResponse:
     responses={400: {"model": ErrorResponse}},
 )
 async def create_task(req: TaskRequest, request: Request) -> TaskResponse:
+    if req.session_id:
+        session = await db.arun(db.get_session, req.session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="session not found")
+        if db.is_session_expired(session):
+            raise HTTPException(status_code=400, detail="session expired")
     row, created = await db.arun(db.create_task, req)
     if created:
         queue = request.app.state.queue

@@ -16,7 +16,7 @@ logger = logging.getLogger("cortex.queue")
 class NullJobQueue(JobQueue):
     """Used when the queue cannot connect: enqueue() is a no-op, available()=False."""
 
-    async def enqueue(self, job: str, *args: Any) -> bool:
+    async def enqueue(self, job: str, *args: Any, queue_name: str | None = None) -> bool:
         logger.warning("Queue unavailable; dropped job %s%r", job, args)
         return False
 
@@ -42,11 +42,11 @@ class ArqJobQueue(JobQueue):
             logger.warning("Redis unavailable — tasks will be created but not enqueued")
             self._pool = None
 
-    async def enqueue(self, job: str, *args: Any) -> bool:
+    async def enqueue(self, job: str, *args: Any, queue_name: str | None = None) -> bool:
         if self._pool is None:
             logger.warning("Queue unavailable; dropped job %s%r", job, args)
             return False
-        await self._pool.enqueue_job(job, *args)
+        await self._pool.enqueue_job(job, *args, _queue_name=queue_name)
         return True
 
     def available(self) -> bool:

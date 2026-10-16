@@ -2,8 +2,11 @@
 
 import asyncio
 import logging
+import shutil
 import time
+from datetime import UTC, datetime, timedelta
 
+from arq import cron
 from arq.connections import RedisSettings
 from browser_use import Browser, BrowserProfile
 
@@ -114,6 +117,42 @@ async def open_session_job(ctx: dict, session_id: str) -> None:
         logger.info("Session %s browser closed", session_id)
 
 
+async def session_cleanup_job(ctx: dict) -> None:
+    """Sweep expired sessions + orphaned/stale profile dirs."""
+    profiles_root = settings.browser_profiles_dir
+    session_ids = await db.arun(db.all_session_ids)
+    stale_task_dirs = set(await db.arun(db.stale_task_profile_dirs))
+
+    removed_dirs = 0
+    cutoff = datetime.now(UTC) - timedelta(days=1)
+    for d in profiles_root.iterdir() if profiles_root.exists() else []:
+        if not d.is_dir():
+            continue
+        if d.name in session_ids:
+            continue  # live session profile
+        # Remove if terminal-task profile or an orphan dir older than a day.
+        stale_task = d.name in stale_task_dirs
+        orphan = (
+            not stale_task
+            and not await db.arun(db.task_exists, d.name)
+            and datetime.fromtimestamp(d.stat().st_mtime, UTC) < cutoff
+        )
+        if stale_task or orphan:
+            shutil.rmtree(d, ignore_errors=True)
+            removed_dirs += 1
+
+    expired_ids = await db.arun(db.delete_expired_sessions)
+    for sid in expired_ids:
+        shutil.rmtree(profiles_root / sid, ignore_errors=True)
+
+    if expired_ids or removed_dirs:
+        logger.info(
+            "Session cleanup: %d expired sessions, %d profile dirs removed",
+            len(expired_ids),
+            removed_dirs,
+        )
+
+
 async def startup(ctx: dict) -> None:
     await db.arun(init_db)
     stale = await db.arun(db.fail_stale_tasks)
@@ -125,14 +164,28 @@ async def startup(ctx: dict) -> None:
 
 
 class WorkerSettings:
-    functions = [
-        run_task_job,
-        approval_response_job,
-        human_resume_job,
-        open_session_job,
+    functions = [run_task_job, approval_response_job, human_resume_job]
+    cron_jobs = [
+        cron(
+            session_cleanup_job,
+            minute=set(range(0, 60, 15)),
+            run_at_startup=True,
+        )
     ]
     on_startup = startup
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     max_jobs = settings.worker_concurrency
     job_timeout = settings.task_timeout_s + 60
+    max_tries = 1
+
+
+class SessionWorkerSettings:
+    """Dedicated lane for headed-login browsers — never starves task jobs."""
+
+    functions = [open_session_job]
+    on_startup = startup
+    redis_settings = RedisSettings.from_dsn(settings.redis_url)
+    queue_name = settings.session_queue_name
+    max_jobs = 1
+    job_timeout = settings.session_open_timeout_s + 60
     max_tries = 1

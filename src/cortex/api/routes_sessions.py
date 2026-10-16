@@ -2,6 +2,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
+from cortex.config import settings
 from cortex.models import (
     CredentialRequest,
     CredentialResponse,
@@ -55,10 +56,28 @@ async def get_session(session_id: str) -> SessionResponse:
     return _to_response(row)
 
 
-@router.delete("/{session_id}", status_code=204, responses={404: {"model": ErrorResponse}})
-async def delete_session(session_id: str) -> None:
-    if not await db.arun(db.delete_session, session_id):
+@router.delete(
+    "/{session_id}",
+    status_code=204,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+)
+async def delete_session(session_id: str, delete_profile: bool = False) -> None:
+    row = await db.arun(db.get_session, session_id)
+    if not row:
         raise HTTPException(status_code=404, detail="session not found")
+    if row.locked_by:
+        raise HTTPException(status_code=409, detail="session_in_use: profile is locked")
+    await db.arun(db.delete_session, session_id)
+    if delete_profile:
+        import shutil
+
+        from cortex.config import settings
+
+        await db.arun(
+            shutil.rmtree,
+            settings.browser_profiles_dir / session_id,
+            True,  # ignore_errors
+        )
 
 
 @router.post(
@@ -68,10 +87,15 @@ async def delete_session(session_id: str) -> None:
 )
 async def open_session(session_id: str, request: Request) -> dict:
     """Open a headed browser on this session's profile so a human can log in."""
-    if not await db.arun(db.get_session, session_id):
+    row = await db.arun(db.get_session, session_id)
+    if not row:
         raise HTTPException(status_code=404, detail="session not found")
+    if db.is_session_expired(row):
+        raise HTTPException(status_code=410, detail="session expired")
     queue = request.app.state.queue
-    if not await queue.enqueue("open_session_job", session_id):
+    if not await queue.enqueue(
+        "open_session_job", session_id, queue_name=settings.session_queue_name
+    ):
         raise HTTPException(status_code=503, detail="queue unavailable")
     return {"status": "opening", "session_id": session_id}
 

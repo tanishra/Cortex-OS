@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     vault_fernet_key: str = ""  # P1 — credential vault
     human_notify_url: str = ""  # P2 — escalation webhook
     session_open_timeout_s: int = 600  # max duration of a headed login browser
+    session_ttl_s: int = 604800  # 7 days; new sessions expire after this
+    session_queue_name: str = "arq:queue:sessions"  # dedicated lane for login jobs
 
     # pluggable backends (ports registry)
     artifact_backend: str = "fs"
