@@ -1,7 +1,6 @@
 """S3 artifact backend tests — fake in-memory S3 client, no network."""
 
 import base64
-import json
 from contextlib import asynccontextmanager
 
 import pytest
@@ -12,24 +11,35 @@ from cortex.ports import registry
 from cortex.store.artifacts_s3 import S3ArtifactStore
 
 
+def _client_error(code: str):
+    from botocore.exceptions import ClientError
+
+    return ClientError({"Error": {"Code": code, "Message": code}}, "op")
+
+
 class FakeS3Client:
     def __init__(self, bucket: str):
         self.bucket = bucket
         self.objects: dict[str, bytes] = {}
-        self.exceptions = type("E", (), {"NoSuchKey": KeyError})()
+        self.bucket_exists = True
+        self.create_bucket_raises: str | None = None
+        self.delete_calls = 0
 
     async def head_bucket(self, Bucket):
-        return {}
+        if not self.bucket_exists:
+            raise _client_error("404")
 
     async def create_bucket(self, Bucket):
-        self.objects[f"__bucket__{Bucket}"] = b""
+        if self.create_bucket_raises:
+            raise _client_error(self.create_bucket_raises)
+        self.bucket_exists = True
 
     async def put_object(self, Bucket, Key, Body, ContentType=None):
         self.objects[Key] = Body
 
     async def get_object(self, Bucket, Key):
         if Key not in self.objects:
-            raise self.exceptions.NoSuchKey(Key)
+            raise _client_error("NoSuchKey")
         from io import BytesIO
 
         return {"Body": _AsyncReader(BytesIO(self.objects[Key]))}
@@ -39,6 +49,8 @@ class FakeS3Client:
         return {"Contents": [{"Key": k} for k in sorted(keys)], "IsTruncated": False}
 
     async def delete_objects(self, Bucket, Delete):
+        self.delete_calls += 1
+        assert len(Delete["Objects"]) <= 1000
         for o in Delete["Objects"]:
             self.objects.pop(o["Key"], None)
 
@@ -114,4 +126,51 @@ async def test_screenshot_bytes_via_step_file(s3_store):
     store, client = s3_store
     client.objects["tasks/T4/step_0007.png"] = b"img"
     assert await store.get_screenshot("T4", "step_0007.png") == b"img"
-    assert json.loads(b"{}" or "{}") is not None
+
+
+async def test_ensure_bucket_race(s3_store):
+    """Concurrent create → AlreadyOwnedByYou must not fail the write."""
+    store, client = s3_store
+    client.bucket_exists = False
+    client.create_bucket_raises = "BucketAlreadyOwnedByYou"
+    await store.write_step("T5", StepRecord(n=1, url="u", title=""), None)
+    assert store._bucket_ready
+    assert "tasks/T5/step_0001.json" in client.objects
+
+
+async def test_ensure_bucket_real_create(s3_store):
+    store, client = s3_store
+    client.bucket_exists = False
+    await store.write_step("T6", StepRecord(n=1, url="u", title=""), None)
+    assert client.bucket_exists
+
+
+async def test_get_raises_non_404_clienterror(s3_store):
+    store, _ = s3_store
+
+    async def denied(Bucket, Key):
+        raise _client_error("AccessDenied")
+
+    # patch a client instance's get_object via subclassing not needed — direct call
+    client = FakeS3Client("b")
+    client.get_object = denied  # type: ignore[method-assign]
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def fake_client():
+        yield client
+
+    store._client = fake_client  # type: ignore[method-assign]
+    import pytest as _pt
+
+    with _pt.raises(Exception, match="AccessDenied"):
+        await store.get_replay("T7")
+
+
+async def test_delete_task_chunks_over_1000(s3_store):
+    store, client = s3_store
+    for i in range(1050):
+        client.objects[f"tasks/T8/step_{i:04d}.json"] = b"{}"
+    await store.delete_task("T8")
+    assert client.delete_calls == 2
+    assert not [k for k in client.objects if k.startswith("tasks/T8/")]

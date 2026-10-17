@@ -1,10 +1,12 @@
 """S3-compatible artifact backend (aioboto3). Prefix: tasks/<task_id>/."""
 
+import asyncio
 import base64
 import json
 import logging
 
 import aioboto3
+from botocore.exceptions import ClientError
 
 from cortex.config import settings
 from cortex.models import StepRecord
@@ -26,9 +28,17 @@ class S3ArtifactStore(ArtifactStore):
             return
         try:
             await client.head_bucket(Bucket=settings.s3_bucket)
-        except Exception:
-            await client.create_bucket(Bucket=settings.s3_bucket)
-            logger.info("Created s3 bucket %s", settings.s3_bucket)
+        except ClientError:
+            try:
+                await client.create_bucket(Bucket=settings.s3_bucket)
+                logger.info("Created s3 bucket %s", settings.s3_bucket)
+            except ClientError as exc:
+                # Another worker may have created it first — that's fine.
+                if exc.response["Error"]["Code"] not in (
+                    "BucketAlreadyExists",
+                    "BucketAlreadyOwnedByYou",
+                ):
+                    raise
         self._bucket_ready = True
 
     def _client(self):
@@ -47,10 +57,8 @@ class S3ArtifactStore(ArtifactStore):
     async def _get(self, client, key: str) -> bytes | None:
         try:
             resp = await client.get_object(Bucket=settings.s3_bucket, Key=key)
-        except client.exceptions.NoSuchKey:
-            return None
-        except Exception as exc:
-            if "NoSuchKey" in type(exc).__name__ or "404" in str(exc):
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] in ("NoSuchKey", "404", "NoSuchBucket"):
                 return None
             raise
         return await resp["Body"].read()
@@ -112,18 +120,15 @@ class S3ArtifactStore(ArtifactStore):
 
     async def list_steps(self, task_id: str) -> list[dict]:
         async with self._client() as client:
-            prefix = self._key(task_id, "step_")
             keys = [
                 k
-                for k in await self._list_keys(client, prefix)
+                for k in await self._list_keys(client, self._key(task_id, "step_"))
                 if k.endswith(".json")
             ]
-            steps = []
-            for k in sorted(keys):
-                data = await self._get(client, k)
-                if data:
-                    steps.append(json.loads(data))
-            return steps
+            datas = await asyncio.gather(
+                *(self._get(client, k) for k in sorted(keys))
+            )
+            return [json.loads(d) for d in datas if d]
 
     async def get_screenshot(self, task_id: str, filename: str) -> bytes | None:
         if safe_filename(filename) is None or not filename.endswith(".png"):
@@ -134,8 +139,9 @@ class S3ArtifactStore(ArtifactStore):
     async def delete_task(self, task_id: str) -> None:
         async with self._client() as client:
             keys = await self._list_keys(client, f"tasks/{task_id}/")
-            if keys:
+            # delete_objects accepts at most 1000 keys per call.
+            for i in range(0, len(keys), 1000):
                 await client.delete_objects(
                     Bucket=settings.s3_bucket,
-                    Delete={"Objects": [{"Key": k} for k in keys]},
+                    Delete={"Objects": [{"Key": k} for k in keys[i : i + 1000]]},
                 )
