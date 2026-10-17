@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -33,6 +34,7 @@ class TaskRequest(BaseModel):
     session_id: str | None = None
     max_steps: int | None = Field(default=None, ge=1, le=500)
     headless: bool | None = None
+    priority: Literal["low", "normal", "high"] = "normal"
     idempotency_key: str | None = None
 
 
@@ -56,6 +58,7 @@ class TaskResponse(BaseModel):
     result: str | None = None
     error: str | None = None
     steps_taken: int = 0
+    priority: str = "normal"
     created_at: datetime
     updated_at: datetime
 

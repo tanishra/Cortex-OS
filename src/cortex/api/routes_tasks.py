@@ -18,9 +18,14 @@ def _to_response(row: TaskRow) -> TaskResponse:
         result=row.result,
         error=row.error,
         steps_taken=row.steps_taken,
+        priority=row.priority,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+# Maps task priority → arq zset score offset (ms). Negative = dequeue sooner.
+_PRIORITY_DEFER_MS = {"high": -3_600_000, "normal": None, "low": 60_000}
 
 
 @router.post(
@@ -39,7 +44,9 @@ async def create_task(req: TaskRequest, request: Request) -> TaskResponse:
     row, created = await db.arun(db.create_task, req)
     if created:
         queue = request.app.state.queue
-        if await queue.enqueue("run_task_job", row.id):
+        if await queue.enqueue(
+            "run_task_job", row.id, defer_ms=_PRIORITY_DEFER_MS[row.priority]
+        ):
             logger.info("Enqueued task %s", row.id)
         else:
             logger.warning("No queue configured; task %s created but not enqueued", row.id)

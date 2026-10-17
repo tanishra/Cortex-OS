@@ -1,6 +1,7 @@
 """Queue backend: arq over Redis, with a null fallback when Redis is down."""
 
 import logging
+from datetime import timedelta
 from typing import Any
 
 from arq import create_pool
@@ -16,7 +17,13 @@ logger = logging.getLogger("cortex.queue")
 class NullJobQueue(JobQueue):
     """Used when the queue cannot connect: enqueue() is a no-op, available()=False."""
 
-    async def enqueue(self, job: str, *args: Any, queue_name: str | None = None) -> bool:
+    async def enqueue(
+        self,
+        job: str,
+        *args: Any,
+        queue_name: str | None = None,
+        defer_ms: int | None = None,
+    ) -> bool:
         logger.warning("Queue unavailable; dropped job %s%r", job, args)
         return False
 
@@ -42,11 +49,20 @@ class ArqJobQueue(JobQueue):
             logger.warning("Redis unavailable — tasks will be created but not enqueued")
             self._pool = None
 
-    async def enqueue(self, job: str, *args: Any, queue_name: str | None = None) -> bool:
+    async def enqueue(
+        self,
+        job: str,
+        *args: Any,
+        queue_name: str | None = None,
+        defer_ms: int | None = None,
+    ) -> bool:
         if self._pool is None:
             logger.warning("Queue unavailable; dropped job %s%r", job, args)
             return False
-        await self._pool.enqueue_job(job, *args, _queue_name=queue_name)
+        kwargs: dict[str, Any] = {"_queue_name": queue_name}
+        if defer_ms is not None:
+            kwargs["_defer_by"] = timedelta(milliseconds=defer_ms)
+        await self._pool.enqueue_job(job, *args, **kwargs)
         return True
 
     def available(self) -> bool:

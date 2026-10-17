@@ -31,6 +31,7 @@ class TaskRow(SQLModel, table=True):
     session_id: str | None = None
     max_steps: int | None = None
     headless: bool | None = None
+    priority: str = "normal"
     idempotency_key: str | None = Field(default=None, index=True, unique=True)
     status: str = TaskStatus.QUEUED
     result: str | None = None
@@ -104,7 +105,10 @@ _MUTABLE_SESSION_FIELDS = {
 # Columns added after the initial schema — SQLite lacks CREATE IF NOT EXISTS
 # for columns, so these are applied idempotently via PRAGMA checks.
 _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
-    "taskrow": {"approval_actions_json": "VARCHAR DEFAULT '[]' NOT NULL"},
+    "taskrow": {
+        "approval_actions_json": "VARCHAR DEFAULT '[]' NOT NULL",
+        "priority": "VARCHAR DEFAULT 'normal' NOT NULL",
+    },
     "sessionrow": {"locked_by": "VARCHAR", "expires_at": "DATETIME"},
     "approvalrow": {"details": "VARCHAR"},
 }
@@ -161,6 +165,7 @@ def create_task(req: TaskRequest) -> tuple[TaskRow, bool]:
         session_id=req.session_id,
         max_steps=req.max_steps,
         headless=req.headless,
+        priority=req.priority,
         idempotency_key=req.idempotency_key,
     )
     with Session(_ENGINE) as s:

@@ -6,7 +6,13 @@ class JobQueue(ABC):
     """Async job queue connecting API and worker processes."""
 
     @abstractmethod
-    async def enqueue(self, job: str, *args: Any, queue_name: str | None = None) -> bool:
+    async def enqueue(
+        self,
+        job: str,
+        *args: Any,
+        queue_name: str | None = None,
+        defer_ms: int | None = None,
+    ) -> bool:
         """Enqueue a named job for the worker. False if queue unavailable."""
 
     @abstractmethod
