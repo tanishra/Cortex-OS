@@ -11,7 +11,7 @@ from arq.connections import RedisSettings
 from browser_use import Browser, BrowserProfile
 
 from cortex.config import settings
-from cortex.engine.runner import run_task, running_agent
+from cortex.engine.runner import run_task, running_agent, running_state
 from cortex.logging import setup_logging
 from cortex.models import TaskStatus
 from cortex.store import db
@@ -38,11 +38,15 @@ async def run_task_job(ctx: dict, task_id: str) -> None:
 async def approval_response_job(ctx: dict, task_id: str, approve: bool) -> None:
     """Deliver an approve/deny decision to a paused agent in this worker."""
     agent = running_agent(task_id)
+    state = running_state(task_id)
     if not agent:
         logger.warning("No running agent for task %s; decision ignored", task_id)
         return
     if approve:
         await db.arun(db.update_task, task_id, status=TaskStatus.RUNNING)
+        if state is not None:
+            state["status"] = TaskStatus.RUNNING
+            state["approval_pending"] = False
         agent.resume()
         logger.info("Task %s approved, resumed", task_id)
     else:
@@ -67,6 +71,9 @@ async def human_resume_job(ctx: dict, task_id: str) -> None:
         )
         return
     await db.arun(db.update_task, task_id, status=TaskStatus.RUNNING)
+    state = running_state(task_id)
+    if state is not None:
+        state["status"] = TaskStatus.RUNNING
     agent.resume()
     logger.info("Task %s resumed by human", task_id)
 
@@ -80,6 +87,8 @@ async def open_session_job(ctx: dict, session_id: str) -> None:
     session = await db.arun(db.get_session, session_id)
     if not session:
         return
+    # Normalize the flag first so a stale close request can't persist across jobs.
+    await db.arun(db.update_session, session_id, close_requested=False)
     if not await db.arun(db.try_lock_session, session_id, f"open:{session_id}"):
         logger.warning("Session %s profile already in use; open rejected", session_id)
         return
@@ -153,7 +162,8 @@ async def session_cleanup_job(ctx: dict) -> None:
         )
 
 
-async def startup(ctx: dict) -> None:
+async def task_startup(ctx: dict) -> None:
+    """Task worker boot: init + sweep stale tasks. Task lane only."""
     await db.arun(init_db)
     stale = await db.arun(db.fail_stale_tasks)
     logger.info(
@@ -161,6 +171,11 @@ async def startup(ctx: dict) -> None:
         settings.worker_concurrency,
         stale,
     )
+
+
+async def session_startup(ctx: dict) -> None:
+    """Session worker boot: init only — never sweeps tasks it doesn't own."""
+    await db.arun(init_db)
 
 
 class WorkerSettings:
@@ -172,7 +187,7 @@ class WorkerSettings:
             run_at_startup=True,
         )
     ]
-    on_startup = startup
+    on_startup = task_startup
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     max_jobs = settings.worker_concurrency
     job_timeout = settings.task_timeout_s + 60
@@ -183,7 +198,7 @@ class SessionWorkerSettings:
     """Dedicated lane for headed-login browsers — never starves task jobs."""
 
     functions = [open_session_job]
-    on_startup = startup
+    on_startup = session_startup
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     queue_name = settings.session_queue_name
     max_jobs = 1

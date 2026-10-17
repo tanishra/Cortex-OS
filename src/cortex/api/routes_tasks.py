@@ -45,7 +45,7 @@ async def create_task(req: TaskRequest, request: Request) -> TaskResponse:
     if created:
         queue = request.app.state.queue
         if await queue.enqueue(
-            "run_task_job", row.id, defer_ms=_PRIORITY_DEFER_MS[row.priority]
+            "run_task_job", row.id, defer_ms=_PRIORITY_DEFER_MS.get(row.priority)
         ):
             logger.info("Enqueued task %s", row.id)
         else:

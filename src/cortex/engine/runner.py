@@ -1,6 +1,5 @@
 """Engine: runs a browser-use Agent for one task row and records artifacts."""
 
-import asyncio
 import json
 import logging
 from urllib.parse import urlparse
@@ -14,16 +13,25 @@ from cortex.engine.prompts import SAFETY_EXTENSION
 from cortex.models import StepRecord, TaskStatus, utcnow
 from cortex.notify import notify_human
 from cortex.store import artifacts, db
+from cortex.utils import spawn
 from cortex.vault import credentials
 
 logger = logging.getLogger("cortex.engine")
 
-# Task_id -> Agent for in-process pause/resume/stop (worker process only).
-_RUNNING: dict[str, Agent] = {}
+# Task_id -> {"agent": Agent, "state": dict} — in-process handles for
+# pause/resume/stop and shared status cache (worker process only).
+_RUNNING: dict[str, dict] = {}
 
 
 def running_agent(task_id: str) -> Agent | None:
-    return _RUNNING.get(task_id)
+    entry = _RUNNING.get(task_id)
+    return entry["agent"] if entry else None
+
+
+def running_state(task_id: str) -> dict | None:
+    """The task's mutable state cache — used by worker jobs to stay coherent."""
+    entry = _RUNNING.get(task_id)
+    return entry["state"] if entry else None
 
 
 def _action_names(output) -> list[str]:
@@ -41,6 +49,29 @@ def _action_names(output) -> list[str]:
 def _host_matches(url: str, domains: list[str]) -> bool:
     host = (urlparse(url).hostname or "").lower()
     return any(host == d or host.endswith("." + d) for d in domains)
+
+
+def _detect_wall(task_id: str, browser_state, agent_output) -> str | None:
+    """Serialize DOM + agent text and run the human-wall detector."""
+    try:
+        dom_text = browser_state.dom_state.llm_representation()
+    except Exception:
+        logger.debug("Task %s: DOM serialization failed", task_id, exc_info=True)
+        dom_text = ""
+    agent_text = " ".join(
+        filter(
+            None,
+            [
+                getattr(agent_output, "evaluation_previous_goal", None),
+                getattr(agent_output, "next_goal", None),
+            ],
+        )
+    )
+    return detect_human_wall(
+        browser_state.url or "",
+        browser_state.title or "",
+        f"{dom_text}\n{agent_text}",
+    )
 
 
 async def run_task(task_id: str) -> None:
@@ -81,8 +112,17 @@ async def run_task(task_id: str) -> None:
     profile_dir = settings.browser_profiles_dir / (row.session_id or task_id)
     profile_dir.mkdir(parents=True, exist_ok=True)
 
-    state = {"domain_blocked": False, "current_url": row.start_url or ""}
+    state = {
+        "domain_blocked": False,
+        "current_url": row.start_url or "",
+        "status": TaskStatus.QUEUED,
+        "approval_pending": False,
+    }
     agent_holder: dict = {}
+
+    async def set_status(status: TaskStatus, **fields) -> None:
+        await db.arun(db.update_task, task_id, status=status, **fields)
+        state["status"] = status
 
     llm = ChatOpenAI(model=settings.openai_model, api_key=settings.openai_api_key)
 
@@ -105,47 +145,35 @@ async def run_task(task_id: str) -> None:
             state["domain_blocked"] = True
             logger.warning("Task %s: domain blocked at %s", task_id, url)
 
-        # Human-in-the-loop gate: entering an approval domain pauses the
-        # agent once and flips the task to waiting_approval until responded.
-        if (
-            approval_domains
-            and _host_matches(url, approval_domains)
-            and not state["domain_blocked"]
-            and await db.arun(db.pending_approval_for_task, task_id) is None
-        ):
-            await db.arun(db.create_approval, task_id, "agent entered gated domain", url)
-            await db.arun(db.update_task, task_id, status=TaskStatus.WAITING_APPROVAL)
-            agent_holder["agent"].pause()
-            logger.info("Task %s: approval requested for %s", task_id, url)
-            asyncio.create_task(notify_human(task_id, url, "approval_domain"))
-
-        # Human escalation: CAPTCHA/2FA wall → pause + waiting_human + webhook.
-        current = await db.arun(db.get_task, task_id)
-        if current and current.status != TaskStatus.WAITING_HUMAN:
-            try:
-                dom_text = browser_state.dom_state.llm_representation()
-            except Exception:
-                logger.debug("Task %s: DOM serialization failed", task_id, exc_info=True)
-                dom_text = ""
-            agent_text = " ".join(
-                filter(
-                    None,
-                    [
-                        getattr(agent_output, "evaluation_previous_goal", None),
-                        getattr(agent_output, "next_goal", None),
-                    ],
-                )
-            )
-            wall = detect_human_wall(
-                url, browser_state.title or "", f"{dom_text}\n{agent_text}"
-            )
+        # Human escalation first: CAPTCHA/2FA wall wins over the approval
+        # gate — even an approved action can't pass a human-only wall.
+        wall = None
+        if state["status"] != TaskStatus.WAITING_HUMAN:
+            wall = _detect_wall(task_id, browser_state, agent_output)
             if wall:
-                await db.arun(db.update_task, task_id, status=TaskStatus.WAITING_HUMAN)
+                await set_status(TaskStatus.WAITING_HUMAN)
                 agent_holder["agent"].pause()
                 logger.warning(
                     "Task %s: human wall detected (%s) at %s", task_id, wall, url
                 )
-                asyncio.create_task(notify_human(task_id, url, wall))
+                spawn(notify_human(task_id, url, wall))
+
+        # Human-in-the-loop gate: entering an approval domain pauses the
+        # agent once and flips the task to waiting_approval until responded.
+        if (
+            not wall
+            and state["status"] == TaskStatus.RUNNING
+            and approval_domains
+            and _host_matches(url, approval_domains)
+            and not state["domain_blocked"]
+            and not state["approval_pending"]
+        ):
+            await db.arun(db.create_approval, task_id, "agent entered gated domain", url)
+            state["approval_pending"] = True
+            await set_status(TaskStatus.WAITING_APPROVAL)
+            agent_holder["agent"].pause()
+            logger.info("Task %s: approval requested for %s", task_id, url)
+            spawn(notify_human(task_id, url, "approval_domain"))
 
         step = StepRecord(
             n=step_n,
@@ -188,7 +216,7 @@ async def run_task(task_id: str) -> None:
         task_id=task_id,
     )
     agent_holder["agent"] = agent
-    _RUNNING[task_id] = agent
+    _RUNNING[task_id] = {"agent": agent, "state": state}
 
     if approval_actions:
         agent.tools.act = make_action_gate(
@@ -196,54 +224,40 @@ async def run_task(task_id: str) -> None:
             approval_actions,
             agent.tools.act,
             lambda: state["current_url"],
+            state=state,
         )
         logger.info("Task %s: gating actions %s", task_id, sorted(approval_actions))
 
-    await db.arun(db.update_task, task_id, status=TaskStatus.RUNNING)
+    await set_status(TaskStatus.RUNNING)
 
     try:
         history = await agent.run(max_steps=row.max_steps or settings.max_steps)
 
         if state["domain_blocked"]:
-            await db.arun(
-                db.update_task,
-                task_id,
-                status=TaskStatus.FAILED,
+            await set_status(
+                TaskStatus.FAILED,
                 error="domain_blocked: agent navigated outside allowed_domains",
             )
             return
 
         if await db.arun(db.is_cancel_requested, task_id):
-            await db.arun(
-                db.update_task,
-                task_id,
-                status=TaskStatus.CANCELLED,
-                error="cancelled by user",
-            )
+            await set_status(TaskStatus.CANCELLED, error="cancelled by user")
             return
 
         if await db.arun(db.has_denied_approval, task_id):
-            await db.arun(
-                db.update_task,
-                task_id,
-                status=TaskStatus.CANCELLED,
-                error="approval denied",
-            )
+            await set_status(TaskStatus.CANCELLED, error="approval denied")
             return
 
-        current = await db.arun(db.get_task, task_id)
-        if current and current.status in (
+        if state["status"] in (
             TaskStatus.WAITING_APPROVAL,
             TaskStatus.WAITING_HUMAN,
         ):
-            await db.arun(db.update_task, task_id, status=TaskStatus.RUNNING)
+            await set_status(TaskStatus.RUNNING)
 
         final = history.final_result()
         success = history.is_successful()
-        await db.arun(
-            db.update_task,
-            task_id,
-            status=TaskStatus.DONE if success else TaskStatus.FAILED,
+        await set_status(
+            TaskStatus.DONE if success else TaskStatus.FAILED,
             result=str(final) if final is not None else None,
             error=None if success else (str(history.errors() or "agent did not complete task")),
         )
@@ -256,12 +270,7 @@ async def run_task(task_id: str) -> None:
 
     except Exception as exc:
         logger.exception("Task %s crashed", task_id)
-        await db.arun(
-            db.update_task,
-            task_id,
-            status=TaskStatus.FAILED,
-            error=f"{type(exc).__name__}: {exc}",
-        )
+        await set_status(TaskStatus.FAILED, error=f"{type(exc).__name__}: {exc}")
     finally:
         _RUNNING.pop(task_id, None)
         if row.session_id:

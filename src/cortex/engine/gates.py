@@ -15,6 +15,7 @@ from browser_use.agent.views import ActionResult
 from cortex.models import TaskStatus
 from cortex.notify import notify_human
 from cortex.store import db
+from cortex.utils import spawn
 
 logger = logging.getLogger("cortex.gates")
 
@@ -23,9 +24,17 @@ _POLL_S = 1.0
 
 
 def make_action_gate(
-    task_id: str, gated_names: set[str], original_act: Callable, get_url: Callable[[], str]
+    task_id: str,
+    gated_names: set[str],
+    original_act: Callable,
+    get_url: Callable[[], str],
+    state: dict | None = None,
 ) -> Callable:
-    """Return an act() replacement that gates actions in gated_names."""
+    """Return an act() replacement that gates actions in gated_names.
+
+    ``state`` is the runner's shared cache dict — kept in sync so on_step
+    doesn't re-derive status from the DB.
+    """
 
     def _action_entries(action: Any) -> list[tuple[str, Any]]:
         try:
@@ -58,15 +67,16 @@ def make_action_gate(
                 await db.arun(
                     db.update_task, task_id, status=TaskStatus.WAITING_APPROVAL
                 )
+                if state is not None:
+                    state["status"] = TaskStatus.WAITING_APPROVAL
+                    state["approval_pending"] = True
                 logger.info(
                     "Task %s: action %s gated, approval %s created",
                     task_id,
                     name,
                     approval.id,
                 )
-                asyncio.create_task(
-                    notify_human(task_id, get_url(), f"approval_action:{name}")
-                )
+                spawn(notify_human(task_id, get_url(), f"approval_action:{name}"))
 
             # Wait for resolution; cancel flag is an escape hatch.
             while True:
@@ -75,6 +85,9 @@ def make_action_gate(
                     await db.arun(
                         db.update_task, task_id, status=TaskStatus.RUNNING
                     )
+                    if state is not None:
+                        state["status"] = TaskStatus.RUNNING
+                        state["approval_pending"] = False
                     break
                 if status == "denied" or await db.arun(
                     db.is_cancel_requested, task_id
