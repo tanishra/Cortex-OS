@@ -130,6 +130,7 @@ async def run_task(task_id: str) -> None:
         browser_profile=BrowserProfile(
             headless=headless,
             user_data_dir=str(profile_dir),
+            chromium_sandbox=settings.browser_chromium_sandbox,
         )
     )
 

@@ -19,6 +19,17 @@ logger = logging.getLogger("cortex.artifacts.s3")
 class S3ArtifactStore(ArtifactStore):
     def __init__(self) -> None:
         self._session = aioboto3.Session()
+        self._bucket_ready = False
+
+    async def _ensure_bucket(self, client) -> None:
+        if self._bucket_ready:
+            return
+        try:
+            await client.head_bucket(Bucket=settings.s3_bucket)
+        except Exception:
+            await client.create_bucket(Bucket=settings.s3_bucket)
+            logger.info("Created s3 bucket %s", settings.s3_bucket)
+        self._bucket_ready = True
 
     def _client(self):
         return self._session.client(
@@ -61,6 +72,7 @@ class S3ArtifactStore(ArtifactStore):
         self, task_id: str, step: StepRecord, screenshot_b64: str | None
     ) -> StepRecord:
         async with self._client() as client:
+            await self._ensure_bucket(client)
             if screenshot_b64:
                 try:
                     await client.put_object(

@@ -1,0 +1,76 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8901:8901"
+    env_file: .env.docker
+    command: uvicorn cortex.main:app --host 0.0.0.0 --port 8901
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      s3:
+        condition: service_started
+    volumes:
+      - profiles:/app/profiles
+      - artifacts:/app/artifacts
+
+  worker:
+    build: .
+    env_file: .env.docker
+    command: python -m arq cortex.worker.WorkerSettings
+    depends_on:
+      api:
+        condition: service_started
+    volumes:
+      - profiles:/app/profiles
+      - artifacts:/app/artifacts
+
+  session-worker:
+    build: .
+    env_file: .env.docker
+    command: python -m arq cortex.worker.SessionWorkerSettings
+    depends_on:
+      api:
+        condition: service_started
+    volumes:
+      - profiles:/app/profiles
+      - artifacts:/app/artifacts
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cortex
+      POSTGRES_PASSWORD: cortex
+      POSTGRES_DB: cortex
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cortex"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # S3-compatible store — Adobe S3Mock (minio/localstack images are gated).
+  # Swap for real MinIO/AWS by changing S3_ENDPOINT_URL + keys in .env.docker.
+  s3:
+    image: adobe/s3mock:latest
+    ports:
+      - "9090:9090"
+    environment:
+      initialBuckets: cortex-artifacts
+      root: /tmp
+
+volumes:
+  pgdata:
+  profiles:
+  artifacts:

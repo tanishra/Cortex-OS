@@ -1,0 +1,14 @@
+.git
+.env
+.env.*
+.venv
+__pycache__
+*.pyc
+artifacts/
+profiles/
+cortex.db
+logs/
+docs/
+tests/
+dump.rdb
+

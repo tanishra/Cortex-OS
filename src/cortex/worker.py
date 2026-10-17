@@ -10,6 +10,7 @@ from arq import cron
 from arq.connections import RedisSettings
 from browser_use import Browser, BrowserProfile
 
+import cortex.store.artifacts_s3  # noqa: F401 — registers the s3 artifact backend
 from cortex.config import settings
 from cortex.engine.runner import run_task, running_agent, running_state
 from cortex.logging import setup_logging
@@ -96,7 +97,11 @@ async def open_session_job(ctx: dict, session_id: str) -> None:
     profile_dir = settings.browser_profiles_dir / session_id
     profile_dir.mkdir(parents=True, exist_ok=True)
     browser = Browser(
-        browser_profile=BrowserProfile(headless=False, user_data_dir=str(profile_dir))
+        browser_profile=BrowserProfile(
+            headless=False,
+            user_data_dir=str(profile_dir),
+            chromium_sandbox=settings.browser_chromium_sandbox,
+        )
     )
     try:
         await browser.start()

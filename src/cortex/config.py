@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     artifacts_dir: Path = BASE_DIR / "artifacts"
     browser_profiles_dir: Path = BASE_DIR / "profiles"
     browser_headless: bool = True
+    browser_chromium_sandbox: bool = True  # false inside unprivileged containers
 
     max_steps: int = 100
     task_timeout_s: int = 600
