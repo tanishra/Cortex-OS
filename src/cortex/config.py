@@ -1,14 +1,31 @@
+import logging
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
+logger = logging.getLogger("cortex.config")
+
+ENV_PROFILE = os.environ.get("ENV_PROFILE", "dev")
+
+
+def _env_files() -> tuple[Path, ...]:
+    """Load order: .env (secrets/base) then .env.{profile} (non-secret overrides)."""
+    files: list[Path] = [BASE_DIR / ".env"]
+    profile = BASE_DIR / f".env.{ENV_PROFILE}"
+    if profile.exists():
+        files.append(profile)
+    elif ENV_PROFILE != "dev":
+        logger.warning("ENV_PROFILE=%s but %s not found", ENV_PROFILE, profile.name)
+    return tuple(files)
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=BASE_DIR / ".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_env_files(), extra="ignore")
 
-    environment: str = "development"
+    environment: str = ENV_PROFILE
     debug: bool = True
 
     openai_api_key: str = ""
