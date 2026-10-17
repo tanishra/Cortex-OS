@@ -3,11 +3,14 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
+from alembic.config import Config
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, Session, SQLModel, create_engine, select, update
 
+from alembic import command
 from cortex.config import settings
 from cortex.models import TaskRequest, TaskStatus, utcnow
 
@@ -84,7 +87,15 @@ class ApprovalRow(SQLModel, table=True):
     resolved_at: datetime | None = None
 
 
-_ENGINE = create_engine(settings.database_url, echo=False)
+def _engine_url() -> str:
+    """Normalize the configured URL — 'postgresql://' gets the psycopg3 driver."""
+    url = settings.database_url
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url.removeprefix("postgresql://")
+    return url
+
+
+_ENGINE = create_engine(_engine_url(), echo=False, pool_pre_ping=True)
 
 _MUTABLE_TASK_FIELDS = {
     "status",
@@ -102,40 +113,34 @@ _MUTABLE_SESSION_FIELDS = {
 }
 
 
-# Columns added after the initial schema — SQLite lacks CREATE IF NOT EXISTS
-# for columns, so these are applied idempotently via PRAGMA checks.
-_COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
-    "taskrow": {
-        "approval_actions_json": "VARCHAR DEFAULT '[]' NOT NULL",
-        "priority": "VARCHAR DEFAULT 'normal' NOT NULL",
-    },
-    "sessionrow": {"locked_by": "VARCHAR", "expires_at": "DATETIME"},
-    "approvalrow": {"details": "VARCHAR"},
-}
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-def _migrate_columns() -> None:
-    from sqlalchemy import inspect, text
+def _alembic_cfg() -> Config:
+    cfg = Config()
+    cfg.set_main_option("script_location", str(_REPO_ROOT / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", _engine_url())
+    return cfg
+
+
+def _migrate() -> None:
+    """Apply alembic migrations; adopt (stamp) legacy DBs that predate alembic."""
+    from sqlalchemy import inspect
 
     inspector = inspect(_ENGINE)
-    with _ENGINE.begin() as conn:
-        for table, columns in _COLUMN_MIGRATIONS.items():
-            if table not in inspector.get_table_names():
-                continue
-            existing = {c["name"] for c in inspector.get_columns(table)}
-            for col, ddl in columns.items():
-                if col not in existing:
-                    conn.execute(
-                        text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
-                    )
-                    logger.info("Migrated %s.%s", table, col)
+    tables = inspector.get_table_names()
+    cfg = _alembic_cfg()
+    if tables and "alembic_version" not in tables:
+        command.stamp(cfg, "head")
+        logger.info("Stamped legacy database at head (alembic adoption)")
+    else:
+        command.upgrade(cfg, "head")
 
 
 def init_db() -> None:
     settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
     settings.browser_profiles_dir.mkdir(parents=True, exist_ok=True)
-    SQLModel.metadata.create_all(_ENGINE)
-    _migrate_columns()
+    _migrate()
 
 
 async def arun(fn: Any, *args: Any, **kwargs: Any) -> Any:
