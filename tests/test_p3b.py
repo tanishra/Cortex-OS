@@ -18,6 +18,12 @@ class FakeS3Client:
         self.objects: dict[str, bytes] = {}
         self.exceptions = type("E", (), {"NoSuchKey": KeyError})()
 
+    async def head_bucket(self, Bucket):
+        return {}
+
+    async def create_bucket(self, Bucket):
+        self.objects[f"__bucket__{Bucket}"] = b""
+
     async def put_object(self, Bucket, Key, Body, ContentType=None):
         self.objects[Key] = Body
 
