@@ -101,5 +101,27 @@ class ApprovalDecision(BaseModel):
     approve: bool
 
 
+class ApiKeyCreate(BaseModel):
+    label: str = Field(min_length=1, max_length=100)
+    daily_limit: int | None = Field(default=None, ge=1)
+
+
+class ApiKeyCreated(BaseModel):
+    id: str
+    label: str
+    key: str  # plaintext, returned exactly once
+
+
+class ApiKeyInfo(BaseModel):
+    id: str
+    label: str
+    prefix: str
+    daily_limit: int | None = None
+    requests_today: int = 0
+    disabled: bool = False
+    created_at: datetime
+    last_used_at: datetime | None = None
+
+
 class ErrorResponse(BaseModel):
     detail: str

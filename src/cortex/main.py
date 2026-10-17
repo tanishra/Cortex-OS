@@ -5,10 +5,17 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 import cortex.store.queue  # noqa: F401 — registers the arq queue backend
-from cortex.api import routes_approvals, routes_artifacts, routes_sessions, routes_tasks
+from cortex.api import (
+    routes_admin,
+    routes_approvals,
+    routes_artifacts,
+    routes_sessions,
+    routes_tasks,
+)
 from cortex.config import settings
 from cortex.logging import setup_logging
 from cortex.ports.registry import get_backend
+from cortex.store import db
 from cortex.store.db import init_db
 from cortex.store.queue import NullJobQueue
 
@@ -19,6 +26,7 @@ logger = logging.getLogger("cortex.main")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    db.seed_api_keys(settings.api_keys.split(","))
     queue = get_backend("queue")
     await queue.connect()
     app.state.queue = queue if queue.available() else NullJobQueue()
@@ -40,17 +48,21 @@ app.include_router(routes_tasks.router)
 app.include_router(routes_artifacts.router)
 app.include_router(routes_sessions.router)
 app.include_router(routes_approvals.router)
+app.include_router(routes_admin.router)
 
 PUBLIC_PATHS = {"/health", "/ready", "/docs", "/openapi.json", "/redoc"}
 
 
 @app.middleware("http")
 async def api_key_auth(request: Request, call_next):
-    """Optional API-key gate. Enabled via REQUIRE_API_KEY=true + API_KEYS list."""
+    """Optional API-key gate. Enabled via REQUIRE_API_KEY=true + hashed key rows."""
     if settings.require_api_key and request.url.path not in PUBLIC_PATHS:
-        keys = {k.strip() for k in settings.api_keys.split(",") if k.strip()}
-        if request.headers.get("x-api-key") not in keys:
+        row = await db.arun(db.authenticate_key, request.headers.get("x-api-key"))
+        if not row:
             return JSONResponse(status_code=401, content={"detail": "invalid api key"})
+        if not await db.arun(db.consume_key, row.id):
+            return JSONResponse(status_code=429, content={"detail": "daily_limit reached"})
+        request.state.api_key_id = row.id
     return await call_next(request)
 
 

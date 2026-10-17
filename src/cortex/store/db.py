@@ -59,6 +59,19 @@ class CredentialRow(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class ApiKeyRow(SQLModel, table=True):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex, primary_key=True)
+    label: str
+    key_hash: str = Field(index=True, unique=True)
+    prefix: str  # first chars of the key, for display only
+    daily_limit: int | None = None  # NULL = unlimited
+    requests_today: int = 0
+    counter_day: str = ""  # YYYY-MM-DD the counter belongs to
+    disabled: bool = False
+    created_at: datetime = Field(default_factory=utcnow)
+    last_used_at: datetime | None = None
+
+
 class ApprovalRow(SQLModel, table=True):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex, primary_key=True)
     task_id: str = Field(index=True)
@@ -475,3 +488,88 @@ def resolve_approval(approval_id: str, status: str) -> ApprovalRow | None:
         s.commit()
         s.refresh(row)
         return row
+
+
+# --- api keys ---
+
+
+def seed_api_keys(keys: list[str]) -> int:
+    """Hash+upsert plaintext keys (env seed). Idempotent. Returns count added."""
+    from cortex.auth import hash_key
+
+    added = 0
+    with Session(_ENGINE) as s:
+        for key in (k.strip() for k in keys if k.strip()):
+            h = hash_key(key)
+            if s.exec(select(ApiKeyRow).where(ApiKeyRow.key_hash == h)).first():
+                continue
+            s.add(ApiKeyRow(label="env:seeded", key_hash=h, prefix=key[:8]))
+            added += 1
+        s.commit()
+    if added:
+        logger.info("Seeded %d API key(s) from environment", added)
+    return added
+
+
+def authenticate_key(key: str | None) -> ApiKeyRow | None:
+    if not key:
+        return None
+    from cortex.auth import hash_key
+
+    with Session(_ENGINE) as s:
+        row = s.exec(select(ApiKeyRow).where(ApiKeyRow.key_hash == hash_key(key))).first()
+        if row and not row.disabled:
+            return row
+        return None
+
+
+def consume_key(key_id: str) -> bool:
+    """Increment the daily counter. False if over daily_limit."""
+    today = utcnow().strftime("%Y-%m-%d")
+    with Session(_ENGINE) as s:
+        row = s.get(ApiKeyRow, key_id)
+        if not row:
+            return False
+        if row.counter_day != today:
+            row.counter_day = today
+            row.requests_today = 0
+        if row.daily_limit is not None and row.requests_today >= row.daily_limit:
+            s.add(row)
+            s.commit()
+            return False
+        row.requests_today += 1
+        row.last_used_at = utcnow()
+        s.add(row)
+        s.commit()
+        return True
+
+
+def create_api_key(label: str, daily_limit: int | None = None) -> tuple[ApiKeyRow, str]:
+    """Returns (row, plaintext_key) — plaintext is never stored."""
+    from cortex.auth import generate_key, hash_key
+
+    key = generate_key()
+    with Session(_ENGINE) as s:
+        row = ApiKeyRow(
+            label=label, key_hash=hash_key(key), prefix=key[:8], daily_limit=daily_limit
+        )
+        s.add(row)
+        s.commit()
+        s.refresh(row)
+        return row, key
+
+
+def list_api_keys() -> list[ApiKeyRow]:
+    with Session(_ENGINE) as s:
+        return list(s.exec(select(ApiKeyRow)).all())
+
+
+def disable_api_key(key_id: str) -> bool:
+    with Session(_ENGINE) as s:
+        row = s.get(ApiKeyRow, key_id)
+        if not row:
+            return False
+        row.disabled = True
+        s.add(row)
+        s.commit()
+        return True
