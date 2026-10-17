@@ -36,9 +36,16 @@ class Settings(BaseSettings):
     session_queue_name: str = "arq:queue:sessions"  # dedicated lane for login jobs
 
     # pluggable backends (ports registry)
-    artifact_backend: str = "fs"
+    artifact_backend: str = "fs"  # fs | s3
     secrets_backend: str = "fernet"
     queue_backend: str = "arq"
+
+    # s3 artifact backend (only used when artifact_backend=s3)
+    s3_bucket: str = "cortex-artifacts"
+    s3_endpoint_url: str | None = None  # e.g. http://localhost:9000 for MinIO
+    s3_access_key: str | None = None
+    s3_secret_key: str | None = None
+    s3_region: str = "us-east-1"
 
 
 settings = Settings()

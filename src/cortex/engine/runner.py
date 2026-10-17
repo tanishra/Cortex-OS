@@ -185,8 +185,7 @@ async def run_task(task_id: str) -> None:
             next_goal=getattr(agent_output, "next_goal", None),
             errors=list(getattr(browser_state, "browser_errors", []) or []),
         )
-        await db.arun(
-            artifacts.write_step,
+        await artifacts.write_step(
             task_id,
             step,
             getattr(browser_state, "screenshot", None),

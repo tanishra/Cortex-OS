@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+import cortex.store.artifacts_s3  # noqa: F401 — registers the s3 artifact backend
 import cortex.store.queue  # noqa: F401 — registers the arq queue backend
 from cortex.api import (
     routes_admin,
