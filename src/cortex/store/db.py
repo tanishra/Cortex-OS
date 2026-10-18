@@ -41,6 +41,8 @@ class TaskRow(SQLModel, table=True):
     error: str | None = None
     steps_taken: int = 0
     retry_count: int = 0
+    resume_from: str | None = None  # JSON checkpoint for crash-resume
+    resume_count: int = 0
     cancel_requested: bool = False
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
@@ -119,6 +121,8 @@ _MUTABLE_TASK_FIELDS = {
     "error",
     "steps_taken",
     "retry_count",
+    "resume_from",
+    "resume_count",
     "cancel_requested",
 }
 _MUTABLE_SESSION_FIELDS = {
@@ -257,23 +261,39 @@ def is_cancel_requested(task_id: str) -> bool:
     return bool(row and row.cancel_requested)
 
 
-def fail_stale_tasks() -> int:
-    """Mark active tasks as failed — called on worker startup after a restart."""
+def requeue_stale_tasks(max_resumes: int) -> list[str]:
+    """Crash recovery: move active tasks back to queued for checkpoint resume.
+
+    Returns task_ids to re-enqueue. Tasks that already consumed their resume
+    budget dead-letter instead (crash-loop protection). Called on task-worker
+    startup; queued rows are untouched (arq still holds those jobs).
+    """
     with Session(_ENGINE) as s:
-        result = s.exec(
-            update(TaskRow)
-            .where(TaskRow.status.in_(ACTIVE_STATUSES))  # type: ignore[attr-defined]
-            .values(
-                status=TaskStatus.FAILED,
-                error="worker_restarted: task interrupted by worker restart",
-                updated_at=utcnow(),
-            )
-        )
+        stale = s.exec(
+            select(TaskRow).where(TaskRow.status.in_(ACTIVE_STATUSES))  # type: ignore[attr-defined]
+        ).all()
+        requeue: list[str] = []
+        dead = 0
+        for row in stale:
+            row.updated_at = utcnow()
+            if row.resume_count >= max_resumes:
+                row.status = TaskStatus.FAILED
+                row.error = "dead_letter: exceeded restart-resume budget"
+                dead += 1
+            else:
+                row.status = TaskStatus.QUEUED
+                row.error = None
+                row.resume_count += 1
+                requeue.append(row.id)
+            s.add(row)
         s.commit()
-        count = result.rowcount or 0
-        if count:
-            logger.warning("Marked %d stale task(s) failed on worker startup", count)
-        return count
+        if requeue or dead:
+            logger.warning(
+                "Startup sweep: %d tasks re-queued for resume, %d dead-lettered",
+                len(requeue),
+                dead,
+            )
+        return requeue
 
 
 # --- sessions ---
@@ -400,6 +420,16 @@ def stale_task_profile_dirs() -> list[str]:
 def all_session_ids() -> set[str]:
     with Session(_ENGINE) as s:
         return set(s.exec(select(SessionRow.id)).all())
+
+
+def locked_session_ids() -> set[str]:
+    """Session ids whose browser profile is currently held (open or in-use)."""
+    with Session(_ENGINE) as s:
+        return set(
+            s.exec(
+                select(SessionRow.id).where(SessionRow.locked_by.is_not(None))  # type: ignore[attr-defined]
+            ).all()
+        )
 
 
 def task_exists(task_id: str) -> bool:

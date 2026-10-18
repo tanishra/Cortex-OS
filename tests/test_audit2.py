@@ -27,7 +27,8 @@ def test_session_startup_does_not_fail_tasks():
     assert db.get_task(row.id).status == TaskStatus.RUNNING
 
     asyncio.run(worker.task_startup({}))
-    assert db.get_task(row.id).status == TaskStatus.FAILED
+    # P4d: re-queued for checkpoint resume, not failed
+    assert db.get_task(row.id).status == TaskStatus.QUEUED
 
 
 def _req(task, **kw):

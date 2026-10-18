@@ -202,13 +202,32 @@ async def session_cleanup_job(ctx: dict) -> None:
 
 
 async def task_startup(ctx: dict) -> None:
-    """Task worker boot: init + sweep stale tasks. Task lane only."""
+    """Task worker boot: init + re-queue interrupted tasks + kill orphans."""
+    from cortex.engine.checkpoint import build_checkpoint
+    from cortex.engine.orphans import kill_orphan_browsers
+
     await db.arun(init_db)
-    stale = await db.arun(db.fail_stale_tasks)
+    # At task-worker startup, ANY browser proc on our profile dirs is an
+    # orphan (no agent can legitimately be running). Kill them BEFORE
+    # re-queueing so resumed tasks don't hit a stale SingletonLock.
+    # Session-worker headed browsers are protected via the session lock.
+    locked = await db.arun(db.locked_session_ids)
+    killed = kill_orphan_browsers(settings.browser_profiles_dir, locked)
+
+    stale_ids = await db.arun(db.requeue_stale_tasks, settings.task_max_retries)
+    redis = ctx.get("redis")
+    for task_id in stale_ids:
+        row = await db.arun(db.get_task, task_id)
+        checkpoint = await build_checkpoint(row)
+        await db.arun(db.update_task, task_id, resume_from=checkpoint)
+        if redis is not None:
+            await redis.enqueue_job("run_task_job", task_id)
+
     logger.info(
-        "Worker started, concurrency=%d, stale_tasks_failed=%d",
+        "Worker started, concurrency=%d, resumed=%d, orphans_killed=%d",
         settings.worker_concurrency,
-        stale,
+        len(stale_ids),
+        killed,
     )
 
 

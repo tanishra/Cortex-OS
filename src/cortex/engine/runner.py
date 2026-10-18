@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from browser_use import Agent, Browser, BrowserProfile, ChatOpenAI
 
 from cortex.config import settings
+from cortex.engine.checkpoint import resume_task_text
 from cortex.engine.escalation import detect_human_wall
 from cortex.engine.gates import make_action_gate
 from cortex.engine.limits import domain_wait, host_of
@@ -105,8 +106,17 @@ async def run_task(task_id: str, redis=None) -> None:
             )
             return
 
+    resume = json.loads(row.resume_from) if row.resume_from else None
+    if resume:
+        await db.arun(db.update_task, task_id, resume_from=None)
+        logger.info(
+            "Task %s resuming from checkpoint: %s", task_id, resume.get("last_url")
+        )
+
     task_text = row.task
-    if row.start_url:
+    if resume:
+        task_text = resume_task_text(row.task, resume)
+    elif row.start_url:
         task_text = f"Start by navigating to {row.start_url}.\n\nTask: {row.task}"
 
     allowed_domains = json.loads(row.allowed_domains_json or "[]")
@@ -190,12 +200,16 @@ async def run_task(task_id: str, redis=None) -> None:
             and not state["domain_blocked"]
             and not state["approval_pending"]
         ):
-            await db.arun(db.create_approval, task_id, "agent entered gated domain", url)
+            existing = await db.arun(db.pending_approval_for_task, task_id)
+            if existing is None:
+                await db.arun(
+                    db.create_approval, task_id, "agent entered gated domain", url
+                )
+                spawn(notify_human(task_id, url, "approval_domain"))
             state["approval_pending"] = True
             await set_status(TaskStatus.WAITING_APPROVAL)
             agent_holder["agent"].pause()
             logger.info("Task %s: approval requested for %s", task_id, url)
-            spawn(notify_human(task_id, url, "approval_domain"))
 
         actions = _action_names(agent_output)
         now = time.monotonic()
@@ -260,7 +274,10 @@ async def run_task(task_id: str, redis=None) -> None:
     await set_status(TaskStatus.RUNNING)
 
     try:
-        history = await agent.run(max_steps=row.max_steps or settings.max_steps)
+        budget = row.max_steps or settings.max_steps
+        if resume:
+            budget = max(1, budget - row.steps_taken)
+        history = await agent.run(max_steps=budget)
 
         if state["domain_blocked"]:
             await set_status(

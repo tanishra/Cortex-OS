@@ -11,6 +11,9 @@ TRANSIENT_MARKERS = (
     "BrowserError",
     "connection",
     "crash",
+    "exited before CDP",
+    "failed to start",
+    "SingletonLock",
 )
 
 # These failure reasons are deliberate — retrying cannot change the outcome.

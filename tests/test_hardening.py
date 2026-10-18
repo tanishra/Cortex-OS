@@ -54,18 +54,23 @@ def test_has_denied_approval():
     assert db.has_denied_approval(row.id) is True
 
 
-def test_fail_stale_tasks():
+def test_requeue_stale_tasks():
     db.init_db()
     t1, _ = db.create_task(TaskRequest(task="stale1"))
     t2, _ = db.create_task(TaskRequest(task="stale2"))
     t3, _ = db.create_task(TaskRequest(task="not-stale"))
     db.update_task(t1.id, status="running")
     db.update_task(t2.id, status="waiting_approval")
-    count = db.fail_stale_tasks()
-    assert count == 2
-    assert db.get_task(t1.id).status == "failed"
-    assert "worker_restarted" in db.get_task(t2.id).error
+    ids = db.requeue_stale_tasks(max_resumes=4)
+    assert sorted(ids) == sorted([t1.id, t2.id])
+    assert db.get_task(t1.id).status == "queued"
+    assert db.get_task(t2.id).resume_count == 1
     assert db.get_task(t3.id).status == "queued"
+    # Resume budget exhausted → dead-letter instead of requeue.
+    db.update_task(t1.id, status="running", resume_count=4)
+    assert db.requeue_stale_tasks(max_resumes=4) == []
+    assert db.get_task(t1.id).status == "failed"
+    assert "dead_letter" in db.get_task(t1.id).error
 
 
 def test_idempotency_unique_constraint():
