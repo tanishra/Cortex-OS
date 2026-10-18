@@ -98,6 +98,15 @@ async def _run_case(case: dict, port: int) -> dict:
 
 
 async def run_suite(only: str | None = None) -> dict:
+    # Isolated state: eval tasks never pollute the app's real database,
+    # artifact store, or browser profiles.
+    eval_dir = Path(__file__).parent
+    settings.database_url = f"sqlite:///{eval_dir / 'evals.db'}"
+    settings.artifacts_dir = eval_dir / "artifacts"
+    settings.browser_profiles_dir = eval_dir / "profiles"
+    from sqlmodel import create_engine
+
+    db._ENGINE = create_engine(settings.database_url, echo=False)
     db.init_db()
     cases = load_cases()
     if only:

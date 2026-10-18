@@ -73,7 +73,9 @@ async def create_task(req: TaskRequest, request: Request) -> TaskResponse:
 
 
 @router.get("", response_model=list[TaskResponse])
-async def get_tasks(limit: int = 50, offset: int = 0) -> list[TaskResponse]:
+async def get_tasks(
+    limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0)
+) -> list[TaskResponse]:
     rows = await db.arun(db.list_tasks, limit=limit, offset=offset)
     return [_to_response(r) for r in rows]
 
@@ -103,6 +105,17 @@ async def cancel_task(task_id: str) -> TaskResponse:
             task_id,
             status=TaskStatus.CANCELLED,
             error="cancelled before start",
+        )
+    elif row.status in (TaskStatus.WAITING_APPROVAL, TaskStatus.WAITING_HUMAN):
+        # A parked agent may never step again — flip the status directly so
+        # the task doesn't report 'waiting' forever. should_stop/cancel flags
+        # still end the underlying run cleanly when it next wakes.
+        row = await db.arun(
+            db.update_task,
+            task_id,
+            status=TaskStatus.CANCELLED,
+            cancel_requested=True,
+            error="cancelled while paused",
         )
     else:
         row = await db.arun(db.request_cancel, task_id)

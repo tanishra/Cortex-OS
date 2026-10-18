@@ -1,5 +1,6 @@
 """Engine: runs a browser-use Agent for one task row and records artifacts."""
 
+import asyncio
 import json
 import logging
 import time
@@ -109,6 +110,15 @@ async def run_task(task_id: str, redis=None) -> None:
             status=TaskStatus.FAILED,
             error=f"{type(exc).__name__}: {exc}",
         )
+        try:
+            await db.arun(
+                db.record_event,
+                task_id,
+                "status",
+                payload_json=json.dumps({"to": "failed", "reason": "setup_crash"}),
+            )
+        except Exception:
+            pass
 
 
 async def _run_task(task_id: str, redis=None) -> None:
@@ -392,6 +402,44 @@ async def _run_task(task_id: str, redis=None) -> None:
     agent_holder["agent"] = agent
     _RUNNING[task_id] = {"agent": agent, "state": state}
 
+    async def _watch_external():
+        """Cross-process control: human-resume / approval / cancel signals are
+        DB writes that any worker can make — this poll lets them reach the
+        agent in whichever process owns it."""
+        while True:
+            await asyncio.sleep(1)
+            try:
+                row_now = await db.arun(db.get_task, task_id)
+                if row_now is None:
+                    continue
+                if row_now.resume_requested:
+                    await db.arun(
+                        db.update_task, task_id, resume_requested=False
+                    )
+                    agent.resume()
+                    logger.info("Task %s: resumed via resume_requested", task_id)
+                if state["status"] == TaskStatus.WAITING_APPROVAL:
+                    pending = await db.arun(db.pending_approval_for_task, task_id)
+                    if pending is None:
+                        if await db.arun(db.has_denied_approval, task_id):
+                            agent.stop()
+                        else:
+                            state["approval_pending"] = False
+                            state["status"] = TaskStatus.RUNNING
+                            agent.resume()
+                            logger.info(
+                                "Task %s: domain approval resolved, resumed",
+                                task_id,
+                            )
+                if row_now.cancel_requested:
+                    agent.stop()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.debug("Task %s: watcher poll failed", task_id, exc_info=True)
+
+    watcher = asyncio.create_task(_watch_external())
+
     # Tracing wrapper is always installed — near-zero cost with no-op tracer.
     original_act = agent.tools.act
 
@@ -416,8 +464,10 @@ async def _run_task(task_id: str, redis=None) -> None:
         logger.info("Task %s: gating actions %s", task_id, sorted(approval_actions))
 
     # Allowlist wraps outermost — disallowed actions never reach gate/browser.
+    # "done" is control flow, not a page action — always permitted, else the
+    # agent could never terminate.
     if allowed_actions:
-        agent.tools.act = make_allowlist(allowed_actions, agent.tools.act)
+        agent.tools.act = make_allowlist(allowed_actions | {"done"}, agent.tools.act)
         logger.info(
             "Task %s: action allowlist %s", task_id, sorted(allowed_actions)
         )
@@ -492,6 +542,26 @@ async def _run_task(task_id: str, redis=None) -> None:
             len(history.agent_steps()),
         )
 
+    except asyncio.CancelledError:
+        # Job-level timeout (wait_for) — persist a checkpoint so the retry
+        # resumes warm instead of starting cold. Re-raise for the worker.
+        checkpoint = {
+            "last_url": state["current_url"],
+            "steps_taken": state["steps_done"],
+            "summary": "\n".join(state["recent_goals"]),
+            "prev_status": str(state["status"]),
+        }
+        try:
+            await db.arun(
+                db.update_task, task_id, resume_from=json.dumps(checkpoint)
+            )
+        except Exception:
+            logger.warning(
+                "Task %s: failed to persist checkpoint on cancel",
+                task_id,
+                exc_info=True,
+            )
+        raise
     except Exception as exc:
         logger.exception("Task %s crashed", task_id)
         await emit("error", payload_json=json.dumps({"error": type(exc).__name__}))
@@ -510,6 +580,7 @@ async def _run_task(task_id: str, redis=None) -> None:
             raise TransientTaskError(f"{type(exc).__name__}: {exc}") from exc
         await set_status(TaskStatus.FAILED, error=f"{type(exc).__name__}: {exc}")
     finally:
+        watcher.cancel()
         _RUNNING.pop(task_id, None)
         if row.session_id:
             await db.arun(db.unlock_session, row.session_id)

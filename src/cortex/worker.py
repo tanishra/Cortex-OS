@@ -89,12 +89,14 @@ async def run_task_job(ctx: dict, task_id: str) -> None:
 
 
 async def approval_response_job(ctx: dict, task_id: str, approve: bool) -> None:
-    """Deliver an approve/deny decision to a paused agent in this worker."""
+    """Record an approve/deny decision; resume the paused agent when local.
+
+    The decision already lives in the approvals table — the owning worker's
+    watcher resolves it even when this job lands on another process, so a
+    missing local agent is a no-op, not an error.
+    """
     agent = running_agent(task_id)
     state = running_state(task_id)
-    if not agent:
-        logger.warning("No running agent for task %s; decision ignored", task_id)
-        return
     if approve:
         await db.arun(
             db.record_event,
@@ -102,12 +104,13 @@ async def approval_response_job(ctx: dict, task_id: str, approve: bool) -> None:
             "status",
             payload_json=json.dumps({"to": "running", "reason": "approved"}),
         )
-        await db.arun(db.update_task, task_id, status=TaskStatus.RUNNING)
-        if state is not None:
-            state["status"] = TaskStatus.RUNNING
-            state["approval_pending"] = False
-        agent.resume()
-        logger.info("Task %s approved, resumed", task_id)
+        if agent:
+            await db.arun(db.update_task, task_id, status=TaskStatus.RUNNING)
+            if state is not None:
+                state["status"] = TaskStatus.RUNNING
+                state["approval_pending"] = False
+            agent.resume()
+        logger.info("Task %s approved%s", task_id, "" if agent else " (remote)")
     else:
         await db.arun(
             db.record_event,
@@ -115,8 +118,9 @@ async def approval_response_job(ctx: dict, task_id: str, approve: bool) -> None:
             "status",
             payload_json=json.dumps({"to": "cancelled", "reason": "denied"}),
         )
-        agent.stop()
-        logger.info("Task %s denied, stopping", task_id)
+        if agent:
+            agent.stop()
+        logger.info("Task %s denied%s", task_id, "" if agent else " (remote)")
 
 
 async def human_resume_job(ctx: dict, task_id: str) -> None:
@@ -126,35 +130,26 @@ async def human_resume_job(ctx: dict, task_id: str) -> None:
     if not task or task.status != TaskStatus.WAITING_HUMAN:
         logger.info("Resume ignored: task %s not waiting_human", task_id)
         return
-    if not agent:
-        logger.warning("No running agent for task %s; marking failed", task_id)
-        await db.arun(
-            db.record_event,
-            task_id,
-            "status",
-            payload_json=json.dumps(
-                {"to": "failed", "reason": "agent_unavailable"}
-            ),
-        )
-        await db.arun(
-            db.update_task,
-            task_id,
-            status=TaskStatus.FAILED,
-            error="agent_unavailable: worker no longer holds the paused agent",
-        )
-        return
     await db.arun(
         db.record_event,
         task_id,
         "status",
         payload_json=json.dumps({"to": "running", "reason": "human_resumed"}),
     )
-    await db.arun(db.update_task, task_id, status=TaskStatus.RUNNING)
-    state = running_state(task_id)
-    if state is not None:
-        state["status"] = TaskStatus.RUNNING
-    agent.resume()
-    logger.info("Task %s resumed by human", task_id)
+    await db.arun(
+        db.update_task, task_id, status=TaskStatus.RUNNING, resume_requested=True
+    )
+    if agent:
+        # Fast path — agent lives in this process.
+        state = running_state(task_id)
+        if state is not None:
+            state["status"] = TaskStatus.RUNNING
+        agent.resume()
+        logger.info("Task %s resumed by human", task_id)
+    else:
+        # Owning worker's watcher will unpause; if no worker holds the agent,
+        # the boot sweep re-queues the task and the flag still applies.
+        logger.info("Task %s: resume flag set (agent on another worker)", task_id)
 
 
 async def open_session_job(ctx: dict, session_id: str) -> None:
@@ -271,6 +266,25 @@ async def task_startup(ctx: dict) -> None:
             # _job_id dedupes concurrent worker boots — arq skips a live dupe.
             await redis.enqueue_job("run_task_job", task_id, _job_id=f"resume:{task_id}")
 
+    # Lost-queue sweep: tasks stuck 'queued' whose arq job never landed
+    # (e.g. Redis was down when POST /tasks enqueued them).
+    if redis is not None:
+        try:
+            pending = await redis.queued_jobs()
+            pending_args = {str(j.args[0]) for j in pending if j.args}
+        except Exception:
+            logger.warning("queued_jobs sweep failed", exc_info=True)
+            pending_args = set()
+        lost = 0
+        for task_id in await db.arun(db.queued_task_ids):
+            if task_id not in pending_args:
+                await redis.enqueue_job(
+                    "run_task_job", task_id, _job_id=f"resume:{task_id}"
+                )
+                lost += 1
+        if lost:
+            logger.warning("Re-enqueued %d queued tasks missing from arq", lost)
+
     logger.info(
         "Worker started, concurrency=%d, resumed=%d, orphans_killed=%d",
         settings.worker_concurrency,
@@ -285,6 +299,12 @@ async def session_startup(ctx: dict) -> None:
     init_tracing("cortex-worker-sessions", settings.otel_exporter_otlp_endpoint)
 
 
+async def worker_shutdown(ctx: dict) -> None:
+    from cortex.telemetry import shutdown_tracing
+
+    await shutdown_tracing()
+
+
 class WorkerSettings:
     functions = [run_task_job, approval_response_job, human_resume_job]
     cron_jobs = [
@@ -295,6 +315,7 @@ class WorkerSettings:
         )
     ]
     on_startup = task_startup
+    on_shutdown = worker_shutdown
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     max_jobs = settings.worker_concurrency
     job_timeout = settings.task_timeout_s + 60
@@ -302,10 +323,14 @@ class WorkerSettings:
 
 
 class SessionWorkerSettings:
-    """Dedicated lane for headed-login browsers — never starves task jobs."""
+    """Dedicated lane for headed-login browsers — never starves task jobs.
+
+    NOTE: open_session_job launches a headed browser — only meaningful on a
+    host with a display (not inside the plain container)."""
 
     functions = [open_session_job]
     on_startup = session_startup
+    on_shutdown = worker_shutdown
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     queue_name = settings.session_queue_name
     max_jobs = 1

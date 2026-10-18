@@ -45,6 +45,7 @@ class TaskRow(SQLModel, table=True):
     retry_count: int = 0
     resume_from: str | None = None  # JSON checkpoint for crash-resume
     resume_count: int = 0
+    resume_requested: bool = False  # cross-process signal to unpause
     cancel_requested: bool = False
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
@@ -125,6 +126,7 @@ _MUTABLE_TASK_FIELDS = {
     "retry_count",
     "resume_from",
     "resume_count",
+    "resume_requested",
     "cancel_requested",
 }
 _MUTABLE_SESSION_FIELDS = {
@@ -164,7 +166,19 @@ def _migrate() -> None:
             command.upgrade(cfg, "head")
         logger.info("Stamped legacy database (alembic adoption)")
     else:
-        command.upgrade(cfg, "head")
+        try:
+            command.upgrade(cfg, "head")
+        except Exception:
+            # Concurrent boot: api + workers all migrate at once — a loser of
+            # the CREATE TABLE race must re-check before failing.
+            import time as _time
+
+            _time.sleep(1)
+            inspector2 = inspect(_ENGINE)
+            if "alembic_version" in inspector2.get_table_names():
+                command.upgrade(cfg, "head")  # idempotent once stamped
+            else:
+                raise
 
 
 def init_db() -> None:
@@ -300,6 +314,15 @@ def requeue_stale_tasks(max_resumes: int) -> list[str]:
         return requeue
 
 
+def queued_task_ids() -> list[str]:
+    """Ids of tasks still 'queued' — startup sweep uses this to find tasks
+    whose arq job was lost (e.g. Redis down at create time)."""
+    with Session(_ENGINE) as s:
+        return list(
+            s.exec(select(TaskRow.id).where(TaskRow.status == TaskStatus.QUEUED)).all()
+        )
+
+
 # --- sessions ---
 
 
@@ -375,6 +398,10 @@ def delete_session(session_id: str) -> bool:
         if not row:
             return False
         s.delete(row)
+        for cred in s.exec(
+            select(CredentialRow).where(CredentialRow.session_id == session_id)
+        ).all():
+            s.delete(cred)
         s.commit()
         return True
 
@@ -566,6 +593,7 @@ def seed_api_keys(keys: list[str]) -> int:
     from cortex.auth import hash_key
 
     added = 0
+    wanted = {hash_key(k.strip()) for k in keys if k.strip()}
     with Session(_ENGINE) as s:
         for key in (k.strip() for k in keys if k.strip()):
             h = hash_key(key)
@@ -573,6 +601,14 @@ def seed_api_keys(keys: list[str]) -> int:
                 continue
             s.add(ApiKeyRow(label="env:seeded", key_hash=h, prefix=key[:8]))
             added += 1
+        # Prune env-seeded keys no longer present in API_KEYS — dropping a
+        # key from the env must disable it (previously it lingered forever).
+        for row in s.exec(
+            select(ApiKeyRow).where(ApiKeyRow.label == "env:seeded")
+        ).all():
+            if row.key_hash not in wanted:
+                s.delete(row)
+                logger.info("Removed stale env-seeded API key %s", row.prefix)
         s.commit()
     if added:
         logger.info("Seeded %d API key(s) from environment", added)
@@ -592,24 +628,30 @@ def authenticate_key(key: str | None) -> ApiKeyRow | None:
 
 
 def consume_key(key_id: str) -> bool:
-    """Increment the daily counter. False if over daily_limit."""
+    """Atomically increment the daily counter. False if over daily_limit."""
     today = utcnow().strftime("%Y-%m-%d")
     with Session(_ENGINE) as s:
-        row = s.get(ApiKeyRow, key_id)
-        if not row:
-            return False
-        if row.counter_day != today:
-            row.counter_day = today
-            row.requests_today = 0
-        if row.daily_limit is not None and row.requests_today >= row.daily_limit:
-            s.add(row)
-            s.commit()
-            return False
-        row.requests_today += 1
-        row.last_used_at = utcnow()
-        s.add(row)
+        # Reset a stale counter — the concurrent double-reset is harmless.
+        s.exec(
+            update(ApiKeyRow)
+            .where(ApiKeyRow.id == key_id, ApiKeyRow.counter_day != today)  # type: ignore[attr-defined]
+            .values(counter_day=today, requests_today=0)
+        )
+        res = s.exec(
+            update(ApiKeyRow)
+            .where(
+                ApiKeyRow.id == key_id,
+                ApiKeyRow.counter_day == today,  # type: ignore[attr-defined]
+                (ApiKeyRow.daily_limit.is_(None))  # type: ignore[attr-defined]
+                | (ApiKeyRow.requests_today < ApiKeyRow.daily_limit),  # type: ignore[operator]
+            )
+            .values(
+                requests_today=ApiKeyRow.requests_today + 1,
+                last_used_at=utcnow(),
+            )
+        )
         s.commit()
-        return True
+        return (res.rowcount or 0) > 0
 
 
 def create_api_key(label: str, daily_limit: int | None = None) -> tuple[ApiKeyRow, str]:
