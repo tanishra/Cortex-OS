@@ -11,6 +11,7 @@ from cortex.config import settings
 from cortex.engine.escalation import detect_human_wall
 from cortex.engine.gates import make_action_gate
 from cortex.engine.prompts import SAFETY_EXTENSION
+from cortex.engine.retry import TransientTaskError, classify
 from cortex.models import StepRecord, TaskStatus, utcnow
 from cortex.notify import notify_human
 from cortex.store import artifacts, db
@@ -80,6 +81,8 @@ async def run_task(task_id: str) -> None:
     row = await db.arun(db.get_task, task_id)
     if not row:
         logger.error("run_task called for unknown task %s", task_id)
+        return
+    if row.status == TaskStatus.CANCELLED:
         return
 
     if row.session_id:
@@ -303,6 +306,8 @@ async def run_task(task_id: str) -> None:
     except Exception as exc:
         logger.exception("Task %s crashed", task_id)
         await emit("error", payload_json=json.dumps({"error": type(exc).__name__}))
+        if classify(exc) == "transient":
+            raise TransientTaskError(f"{type(exc).__name__}: {exc}") from exc
         await set_status(TaskStatus.FAILED, error=f"{type(exc).__name__}: {exc}")
     finally:
         _RUNNING.pop(task_id, None)

@@ -58,6 +58,7 @@ class TaskResponse(BaseModel):
     result: str | None = None
     error: str | None = None
     steps_taken: int = 0
+    retry_count: int = 0
     priority: str = "normal"
     created_at: datetime
     updated_at: datetime

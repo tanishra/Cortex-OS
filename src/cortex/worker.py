@@ -8,10 +8,12 @@ from datetime import UTC, datetime, timedelta
 
 from arq import cron
 from arq.connections import RedisSettings
+from arq.worker import Retry
 from browser_use import Browser, BrowserProfile
 
 import cortex.store.artifacts_s3  # noqa: F401 — registers the s3 artifact backend
 from cortex.config import settings
+from cortex.engine.retry import TransientTaskError
 from cortex.engine.runner import run_task, running_agent, running_state
 from cortex.logging import setup_logging
 from cortex.models import TaskStatus
@@ -22,18 +24,48 @@ setup_logging()
 logger = logging.getLogger("cortex.worker")
 
 
-async def run_task_job(ctx: dict, task_id: str) -> None:
-    logger.info("Worker picked up task %s", task_id)
-    try:
-        await asyncio.wait_for(run_task(task_id), timeout=settings.task_timeout_s)
-    except TimeoutError:
-        logger.error("Task %s exceeded timeout of %ds", task_id, settings.task_timeout_s)
+async def _maybe_retry(ctx: dict, task_id: str, error: str) -> None:
+    """Retry transient failures with backoff; dead-letter after max attempts."""
+    attempt = ctx.get("job_try", 1)
+    if attempt < settings.task_max_retries:
+        delay = min(
+            settings.task_retry_base_s * (2 ** (attempt - 1)),
+            60,
+        )
         await db.arun(
             db.update_task,
             task_id,
-            status=TaskStatus.FAILED,
-            error=f"timeout: exceeded {settings.task_timeout_s}s",
+            status=TaskStatus.QUEUED,
+            error=f"retrying: {error} (attempt {attempt})",
+            retry_count=attempt,
         )
+        logger.warning(
+            "Task %s transient failure (%s); retry %d in %.0fs",
+            task_id,
+            error,
+            attempt,
+            delay,
+        )
+        raise Retry(defer=delay)
+    await db.arun(
+        db.update_task,
+        task_id,
+        status=TaskStatus.FAILED,
+        error=f"dead_letter: {error}",
+        retry_count=attempt,
+    )
+    logger.error("Task %s dead-lettered after %d attempts: %s", task_id, attempt, error)
+
+
+async def run_task_job(ctx: dict, task_id: str) -> None:
+    logger.info("Worker picked up task %s (try %s)", task_id, ctx.get("job_try", 1))
+    try:
+        await asyncio.wait_for(run_task(task_id), timeout=settings.task_timeout_s)
+    except TransientTaskError as exc:
+        await _maybe_retry(ctx, task_id, str(exc))
+    except TimeoutError:
+        logger.error("Task %s exceeded timeout of %ds", task_id, settings.task_timeout_s)
+        await _maybe_retry(ctx, task_id, f"timeout: exceeded {settings.task_timeout_s}s")
 
 
 async def approval_response_job(ctx: dict, task_id: str, approve: bool) -> None:
@@ -196,7 +228,7 @@ class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     max_jobs = settings.worker_concurrency
     job_timeout = settings.task_timeout_s + 60
-    max_tries = 1
+    max_tries = settings.task_max_retries
 
 
 class SessionWorkerSettings:

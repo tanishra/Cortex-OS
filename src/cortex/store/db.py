@@ -40,6 +40,7 @@ class TaskRow(SQLModel, table=True):
     result: str | None = None
     error: str | None = None
     steps_taken: int = 0
+    retry_count: int = 0
     cancel_requested: bool = False
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
@@ -117,6 +118,7 @@ _MUTABLE_TASK_FIELDS = {
     "result",
     "error",
     "steps_taken",
+    "retry_count",
     "cancel_requested",
 }
 _MUTABLE_SESSION_FIELDS = {

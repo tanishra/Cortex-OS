@@ -25,6 +25,7 @@ def _to_response(row: TaskRow) -> TaskResponse:
         result=row.result,
         error=row.error,
         steps_taken=row.steps_taken,
+        retry_count=row.retry_count,
         priority=row.priority,
         created_at=row.created_at,
         updated_at=row.updated_at,

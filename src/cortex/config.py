@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     task_timeout_s: int = 600
     step_timeout_s: int = 180
     worker_concurrency: int = 2
+    task_max_retries: int = 4  # total attempts including the first
+    task_retry_base_s: float = 2.0  # backoff: base * 2^(attempt-1), capped at 60s
 
     require_api_key: bool = False
     api_keys: str = ""  # comma-separated
