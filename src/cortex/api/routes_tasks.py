@@ -29,6 +29,8 @@ def _to_response(row: TaskRow) -> TaskResponse:
         retry_count=row.retry_count,
         resume_count=row.resume_count,
         priority=row.priority,
+        allowed_actions=json.loads(row.allowed_actions_json or "[]"),
+        max_tokens=row.max_tokens,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

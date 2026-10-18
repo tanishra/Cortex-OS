@@ -31,6 +31,14 @@ class TaskRequest(BaseModel):
         default_factory=list,
         description="browser-use action names requiring human approval before executing.",
     )
+    allowed_actions: list[str] = Field(
+        default_factory=list,
+        description="browser-use action names the agent may run; empty = all allowed.",
+    )
+    max_tokens: int | None = Field(
+        default=None, ge=1,
+        description="Token budget; task stops with cost_exceeded beyond this.",
+    )
     session_id: str | None = None
     max_steps: int | None = Field(default=None, ge=1, le=500)
     headless: bool | None = None
@@ -61,6 +69,8 @@ class TaskResponse(BaseModel):
     retry_count: int = 0
     resume_count: int = 0
     priority: str = "normal"
+    allowed_actions: list[str] = Field(default_factory=list)
+    max_tokens: int | None = None
     created_at: datetime
     updated_at: datetime
 

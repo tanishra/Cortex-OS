@@ -10,7 +10,7 @@ from browser_use import Agent, Browser, BrowserProfile, ChatOpenAI
 from cortex.config import settings
 from cortex.engine.checkpoint import resume_task_text
 from cortex.engine.escalation import detect_human_wall
-from cortex.engine.gates import make_action_gate
+from cortex.engine.gates import make_action_gate, make_allowlist
 from cortex.engine.limits import domain_wait, host_of
 from cortex.engine.prompts import SAFETY_EXTENSION
 from cortex.engine.retry import TransientTaskError, classify
@@ -167,6 +167,8 @@ async def run_task(task_id: str, redis=None) -> None:
     allowed_domains = json.loads(row.allowed_domains_json or "[]")
     approval_domains = json.loads(row.approval_domains_json or "[]")
     approval_actions = set(json.loads(row.approval_actions_json or "[]"))
+    allowed_actions = set(json.loads(row.allowed_actions_json or "[]"))
+    token_budget = row.max_tokens if row.max_tokens is not None else settings.task_max_tokens
     headless = row.headless if row.headless is not None else settings.browser_headless
 
     profile_dir = settings.browser_profiles_dir / (row.session_id or task_id)
@@ -188,6 +190,9 @@ async def run_task(task_id: str, redis=None) -> None:
         "suppress_wall_notify": bool(
             resume and resume.get("prev_status") == "waiting_human"
         ),
+        "cost_exceeded": False,
+        "latency_exceeded": False,
+        "start_ts": time.monotonic(),
     }
     agent_holder: dict = {}
 
@@ -216,6 +221,20 @@ async def run_task(task_id: str, redis=None) -> None:
         state["current_url"] = url
         n = step_n + state["step_offset"]
         state["steps_done"] = n
+        if (
+            settings.task_latency_budget_s > 0
+            and not state["latency_exceeded"]
+            and time.monotonic() - state["start_ts"] > settings.task_latency_budget_s
+        ):
+            state["latency_exceeded"] = True
+            await emit(
+                "latency_exceeded",
+                n=n,
+                payload_json=json.dumps(
+                    {"budget_s": settings.task_latency_budget_s}
+                ),
+            )
+            logger.warning("Task %s exceeded latency budget at step %d", task_id, n)
         goal = getattr(agent_output, "next_goal", None)
         if goal:
             state["recent_goals"] = (state["recent_goals"] + [f"step {n}: {goal}"])[-3:]
@@ -303,12 +322,34 @@ async def run_task(task_id: str, redis=None) -> None:
     async def should_stop() -> bool:
         if state["domain_blocked"] or await db.arun(db.is_cancel_requested, task_id):
             return True
+        if token_budget > 0:
+            try:
+                usage = await agent.token_cost_service.get_usage_summary()
+                if usage.total_tokens > token_budget:
+                    state["cost_exceeded"] = True
+                    logger.warning(
+                        "Task %s token budget %d exceeded (%d used)",
+                        task_id,
+                        token_budget,
+                        usage.total_tokens,
+                    )
+                    return True
+            except Exception:
+                logger.debug("Task %s: usage check failed", task_id, exc_info=True)
         return await db.arun(db.has_denied_approval, task_id)
 
     agent = Agent(
         task=task_text,
         llm=llm,
         browser=browser,
+        fallback_llm=(
+            ChatOpenAI(
+                model=settings.openai_fallback_model,
+                api_key=settings.openai_api_key,
+            )
+            if settings.openai_fallback_model
+            else None
+        ),
         sensitive_data=sensitive_data,
         use_vision="auto",
         max_failures=5,
@@ -345,6 +386,13 @@ async def run_task(task_id: str, redis=None) -> None:
         )
         logger.info("Task %s: gating actions %s", task_id, sorted(approval_actions))
 
+    # Allowlist wraps outermost — disallowed actions never reach gate/browser.
+    if allowed_actions:
+        agent.tools.act = make_allowlist(allowed_actions, agent.tools.act)
+        logger.info(
+            "Task %s: action allowlist %s", task_id, sorted(allowed_actions)
+        )
+
     await set_status(TaskStatus.RUNNING)
 
     try:
@@ -374,6 +422,13 @@ async def run_task(task_id: str, redis=None) -> None:
 
         if await db.arun(db.has_denied_approval, task_id):
             await set_status(TaskStatus.CANCELLED, error="approval denied")
+            return
+
+        if state["cost_exceeded"]:
+            await set_status(
+                TaskStatus.FAILED,
+                error=f"cost_exceeded: token budget {token_budget} exceeded",
+            )
             return
 
         if state["status"] in (

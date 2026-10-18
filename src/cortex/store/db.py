@@ -31,6 +31,8 @@ class TaskRow(SQLModel, table=True):
     allowed_domains_json: str = "[]"
     approval_domains_json: str = "[]"
     approval_actions_json: str = "[]"
+    allowed_actions_json: str = "[]"
+    max_tokens: int | None = None
     session_id: str | None = None
     max_steps: int | None = None
     headless: bool | None = None
@@ -195,6 +197,8 @@ def create_task(req: TaskRequest) -> tuple[TaskRow, bool]:
         allowed_domains_json=json.dumps(req.allowed_domains),
         approval_domains_json=json.dumps(req.approval_domains),
         approval_actions_json=json.dumps(req.approval_actions),
+        allowed_actions_json=json.dumps(req.allowed_actions),
+        max_tokens=req.max_tokens,
         session_id=req.session_id,
         max_steps=req.max_steps,
         headless=req.headless,

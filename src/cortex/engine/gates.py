@@ -105,3 +105,39 @@ def make_action_gate(
         return await original_act(*args, **kwargs)
 
     return gated_act
+
+
+def make_allowlist(
+    allowed_names: set[str], original_act: Callable
+) -> Callable:
+    """Return an act() replacement that rejects actions outside allowed_names.
+
+    Installed outermost — a disallowed action must never reach the approval
+    gate or the browser. The error goes back to the agent so it adapts.
+    """
+
+    def _names(action: Any) -> list[str]:
+        try:
+            return [
+                k
+                for k, v in action.model_dump(exclude_unset=True).items()
+                if v is not None
+            ]
+        except Exception:
+            return []
+
+    async def allowlisted_act(*args: Any, **kwargs: Any) -> ActionResult:
+        action = kwargs.get("action", args[0] if args else None)
+        for name in _names(action):
+            if name not in allowed_names:
+                return ActionResult(
+                    success=False,
+                    error=f"action '{name}' not in allowed_actions for this task",
+                    long_term_memory=(
+                        f"The action '{name}' is not permitted. "
+                        "Do not retry it; use an allowed action or done."
+                    ),
+                )
+        return await original_act(*args, **kwargs)
+
+    return allowlisted_act

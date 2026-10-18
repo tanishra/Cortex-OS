@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     rate_limit_per_domain_s: float = 0.0
     # OTLP/HTTP base, e.g. http://jaeger:4318 — empty = tracing off
     otel_exporter_otlp_endpoint: str = ""
+    task_max_tokens: int = 0  # 0 = off; default per-task token budget
+    task_latency_budget_s: float = 0.0  # 0 = off; flag tasks slower than this
+    openai_fallback_model: str = ""  # fallback_llm for browser-use; empty = none
 
     require_api_key: bool = False
     api_keys: str = ""  # comma-separated
