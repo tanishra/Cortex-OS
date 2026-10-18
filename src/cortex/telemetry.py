@@ -26,7 +26,9 @@ def init_tracing(service_name: str, endpoint: str) -> None:
         resource=Resource({SERVICE_NAME: service_name})
     )
     _provider.add_span_processor(
-        BatchSpanProcessor(OTLPSpanExporter(endpoint=f"{endpoint}/v1/traces"))
+        BatchSpanProcessor(
+            OTLPSpanExporter(endpoint=f"{endpoint.rstrip('/')}/v1/traces")
+        )
     )
     trace.set_tracer_provider(_provider)
     logger.info("OTel tracing enabled → %s (service=%s)", endpoint, service_name)

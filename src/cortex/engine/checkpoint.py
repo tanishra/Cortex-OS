@@ -37,7 +37,13 @@ async def build_checkpoint(row: TaskRow) -> str:
     summary = "\n".join(bits)[-_SUMMARY_MAX_CHARS:]
 
     return json.dumps(
-        {"last_url": last_url, "steps_taken": row.steps_taken, "summary": summary}
+        {
+            "last_url": last_url,
+            "steps_taken": row.steps_taken,
+            "summary": summary,
+            # Lets the resumed run suppress a duplicate wall notification.
+            "prev_status": str(row.status),
+        }
     )
 
 

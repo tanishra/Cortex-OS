@@ -90,6 +90,15 @@ async def run_task(task_id: str, redis=None) -> None:
     if row.status == TaskStatus.CANCELLED:
         return
 
+    async def emit(kind: str, **fields) -> None:
+        """Telemetry write — must never break task execution."""
+        try:
+            await db.arun(db.record_event, task_id, kind, **fields)
+        except Exception:
+            logger.warning(
+                "Task %s: failed to record %s event", task_id, kind, exc_info=True
+            )
+
     # Per-domain start throttle — before session lock so we never sleep
     # while holding a profile.
     if redis is not None and settings.rate_limit_per_domain_s > 0:
@@ -100,6 +109,12 @@ async def run_task(task_id: str, redis=None) -> None:
     if row.session_id:
         session = await db.arun(db.get_session, row.session_id)
         if session and db.is_session_expired(session):
+            await emit(
+                "status",
+                payload_json=json.dumps(
+                    {"to": "failed", "reason": "session_expired"}
+                ),
+            )
             await db.arun(
                 db.update_task,
                 task_id,
@@ -108,6 +123,12 @@ async def run_task(task_id: str, redis=None) -> None:
             )
             return
         if not await db.arun(db.try_lock_session, row.session_id, task_id):
+            await emit(
+                "status",
+                payload_json=json.dumps(
+                    {"to": "failed", "reason": "session_in_use"}
+                ),
+            )
             await db.arun(
                 db.update_task,
                 task_id,
@@ -116,9 +137,23 @@ async def run_task(task_id: str, redis=None) -> None:
             )
             return
 
-    resume = json.loads(row.resume_from) if row.resume_from else None
-    if resume:
+    resume = None
+    if row.resume_from:
+        try:
+            resume = json.loads(row.resume_from)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(
+                "Task %s: corrupt resume_from — starting fresh", task_id
+            )
+        else:
+            if not isinstance(resume, dict):
+                logger.warning(
+                    "Task %s: corrupt resume_from — starting fresh", task_id
+                )
+                resume = None
+    if resume or row.resume_from:
         await db.arun(db.update_task, task_id, resume_from=None)
+    if resume:
         logger.info(
             "Task %s resuming from checkpoint: %s", task_id, resume.get("last_url")
         )
@@ -148,17 +183,13 @@ async def run_task(task_id: str, redis=None) -> None:
         "step_offset": row.steps_taken,
         "steps_done": row.steps_taken,
         "recent_goals": [],
+        # Resumed from waiting_human → first wall re-detection pauses as
+        # usual but skips re-notifying (same wall, already reported).
+        "suppress_wall_notify": bool(
+            resume and resume.get("prev_status") == "waiting_human"
+        ),
     }
     agent_holder: dict = {}
-
-    async def emit(kind: str, **fields) -> None:
-        """Telemetry write — must never break task execution."""
-        try:
-            await db.arun(db.record_event, task_id, kind, **fields)
-        except Exception:
-            logger.warning(
-                "Task %s: failed to record %s event", task_id, kind, exc_info=True
-            )
 
     async def set_status(status: TaskStatus, **fields) -> None:
         await db.arun(db.update_task, task_id, status=status, **fields)
@@ -215,7 +246,10 @@ async def run_task(task_id: str, redis=None) -> None:
                 logger.warning(
                     "Task %s: human wall detected (%s) at %s", task_id, wall, url
                 )
-                spawn(notify_human(task_id, url, wall))
+                if state["suppress_wall_notify"]:
+                    state["suppress_wall_notify"] = False
+                else:
+                    spawn(notify_human(task_id, url, wall))
 
         # Human-in-the-loop gate: entering an approval domain pauses the
         # agent once and flips the task to waiting_approval until responded.
@@ -384,6 +418,7 @@ async def run_task(task_id: str, redis=None) -> None:
                 "last_url": state["current_url"],
                 "steps_taken": state["steps_done"],
                 "summary": "\n".join(state["recent_goals"]),
+                "prev_status": str(state["status"]),
             }
             await db.arun(
                 db.update_task, task_id, resume_from=json.dumps(checkpoint)

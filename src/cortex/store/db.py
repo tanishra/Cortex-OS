@@ -663,7 +663,11 @@ def list_events(task_id: str, limit: int = 1000) -> list[TaskEventRow]:
 
 
 def task_stats() -> dict[str, Any]:
-    """Aggregates for the /stats endpoint."""
+    """Aggregates for the /stats endpoint.
+
+    Scans all task rows + finished events — fine at current scale; needs
+    rollup/pre-aggregation if task count grows large.
+    """
     with Session(_ENGINE) as s:
         rows = s.exec(select(TaskRow.status, TaskRow.steps_taken)).all()
         by_status: dict[str, int] = {}

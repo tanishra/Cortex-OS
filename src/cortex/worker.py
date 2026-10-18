@@ -96,6 +96,12 @@ async def approval_response_job(ctx: dict, task_id: str, approve: bool) -> None:
         logger.warning("No running agent for task %s; decision ignored", task_id)
         return
     if approve:
+        await db.arun(
+            db.record_event,
+            task_id,
+            "status",
+            payload_json=json.dumps({"to": "running", "reason": "approved"}),
+        )
         await db.arun(db.update_task, task_id, status=TaskStatus.RUNNING)
         if state is not None:
             state["status"] = TaskStatus.RUNNING
@@ -103,6 +109,12 @@ async def approval_response_job(ctx: dict, task_id: str, approve: bool) -> None:
         agent.resume()
         logger.info("Task %s approved, resumed", task_id)
     else:
+        await db.arun(
+            db.record_event,
+            task_id,
+            "status",
+            payload_json=json.dumps({"to": "cancelled", "reason": "denied"}),
+        )
         agent.stop()
         logger.info("Task %s denied, stopping", task_id)
 
@@ -117,12 +129,26 @@ async def human_resume_job(ctx: dict, task_id: str) -> None:
     if not agent:
         logger.warning("No running agent for task %s; marking failed", task_id)
         await db.arun(
+            db.record_event,
+            task_id,
+            "status",
+            payload_json=json.dumps(
+                {"to": "failed", "reason": "agent_unavailable"}
+            ),
+        )
+        await db.arun(
             db.update_task,
             task_id,
             status=TaskStatus.FAILED,
             error="agent_unavailable: worker no longer holds the paused agent",
         )
         return
+    await db.arun(
+        db.record_event,
+        task_id,
+        "status",
+        payload_json=json.dumps({"to": "running", "reason": "human_resumed"}),
+    )
     await db.arun(db.update_task, task_id, status=TaskStatus.RUNNING)
     state = running_state(task_id)
     if state is not None:
