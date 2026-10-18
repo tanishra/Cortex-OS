@@ -1,7 +1,7 @@
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from cortex.config import settings
 from cortex.models import (
@@ -112,7 +112,9 @@ async def cancel_task(task_id: str) -> TaskResponse:
     response_model=list[TaskEventResponse],
     responses={404: {"model": ErrorResponse}},
 )
-async def get_task_events(task_id: str, limit: int = 1000) -> list[TaskEventResponse]:
+async def get_task_events(
+    task_id: str, limit: int = Query(1000, ge=1, le=5000)
+) -> list[TaskEventResponse]:
     if not await db.arun(db.task_exists, task_id):
         raise HTTPException(status_code=404, detail="task not found")
     rows = await db.arun(db.list_events, task_id, limit)

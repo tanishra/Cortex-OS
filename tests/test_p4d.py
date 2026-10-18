@@ -77,6 +77,54 @@ def test_resume_prompt_contains_context(monkeypatch):
     assert db.get_task(row.id).status == TaskStatus.DONE
 
 
+def test_resume_step_offset_no_clobber(monkeypatch):
+    """Resumed run must not overwrite prior step artifacts (step_n restarts
+    at 1 inside the agent — we offset by prior steps_taken)."""
+    db.init_db()
+    row, _ = db.create_task(TaskRequest(task="offset", start_url="https://a.com"))
+    step = StepRecord(n=1, url="https://a.com/1", title="one")
+    asyncio.run(artifacts.write_step(row.id, step, None))
+    db.update_task(
+        row.id,
+        status=TaskStatus.RUNNING,
+        steps_taken=1,
+        resume_from='{"last_url": "https://a.com/1", "steps_taken": 1, "summary": "s"}',
+    )
+
+    step_state = SimpleNamespace(
+        url="https://a.com/2", title="two", dom_state=None, browser_errors=[]
+    )
+    out = SimpleNamespace(
+        action=[], evaluation_previous_goal=None, memory=None, next_goal=None
+    )
+
+    class _A:
+        def __init__(self, **kwargs):
+            self._cb = kwargs["register_new_step_callback"]
+            self.tools = SimpleNamespace(act=lambda *a, **k: None)
+
+        async def run(self, max_steps=None):
+            await self._cb(step_state, out, 1)  # agent counts from 1
+            return SimpleNamespace(
+                usage=None,
+                agent_steps=lambda: [1],
+                final_result=lambda: "ok",
+                is_successful=lambda: True,
+                errors=lambda: [],
+            )
+
+    monkeypatch.setattr(runner, "Agent", _A)
+    monkeypatch.setattr(runner, "ChatOpenAI", lambda **k: object())
+    monkeypatch.setattr(
+        runner, "Browser", lambda **k: SimpleNamespace(kill=AsyncMock())
+    )
+    asyncio.run(runner.run_task(row.id))
+
+    steps = asyncio.run(artifacts.list_steps(row.id))
+    assert sorted(s["n"] for s in steps) == [1, 2]  # no overwrite
+    assert db.get_task(row.id).steps_taken == 2
+
+
 def test_no_resume_unchanged(monkeypatch):
     db.init_db()
     row, _ = db.create_task(

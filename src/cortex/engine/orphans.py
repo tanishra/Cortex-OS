@@ -1,4 +1,8 @@
-"""Orphan browser cleanup: kill Chromium procs leaked by a crashed worker."""
+"""Orphan browser cleanup: kill Chromium procs leaked by a crashed worker.
+
+Constraint: safe only with ONE task-worker process per profiles dir — a
+sibling worker's live browsers share the same root and would be killed.
+"""
 
 import logging
 import os

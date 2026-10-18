@@ -39,16 +39,18 @@ def running_state(task_id: str) -> dict | None:
     return entry["state"] if entry else None
 
 
+def _action_name(action) -> str:
+    """Best-effort name of a single browser-use action."""
+    try:
+        dumped = action.model_dump(exclude_unset=True)
+        return next(iter(dumped.keys()), "unknown")
+    except Exception:
+        return type(action).__name__
+
+
 def _action_names(output) -> list[str]:
     """Extract action names from an AgentOutput's action list, defensively."""
-    names = []
-    for action in getattr(output, "action", []) or []:
-        try:
-            dumped = action.model_dump(exclude_unset=True)
-            names.append(next(iter(dumped.keys()), "unknown"))
-        except Exception:
-            names.append(type(action).__name__)
-    return names
+    return [_action_name(a) for a in getattr(output, "action", []) or []]
 
 
 def _host_matches(url: str, domains: list[str]) -> bool:
@@ -87,6 +89,13 @@ async def run_task(task_id: str, redis=None) -> None:
         return
     if row.status == TaskStatus.CANCELLED:
         return
+
+    # Per-domain start throttle — before session lock so we never sleep
+    # while holding a profile.
+    if redis is not None and settings.rate_limit_per_domain_s > 0:
+        await domain_wait(
+            redis, host_of(row.start_url), settings.rate_limit_per_domain_s
+        )
 
     if row.session_id:
         session = await db.arun(db.get_session, row.session_id)
@@ -134,6 +143,9 @@ async def run_task(task_id: str, redis=None) -> None:
         "status": TaskStatus.QUEUED,
         "approval_pending": False,
         "last_step_ts": time.monotonic(),
+        # Resumed agents count steps from 1 again — offset keeps DB count
+        # and artifact filenames monotonic (no clobber of prior evidence).
+        "step_offset": row.steps_taken if resume else 0,
     }
     agent_holder: dict = {}
 
@@ -150,11 +162,6 @@ async def run_task(task_id: str, redis=None) -> None:
         await db.arun(db.update_task, task_id, status=status, **fields)
         state["status"] = status
         await emit("status", payload_json=json.dumps({"to": str(status)}))
-
-    if redis is not None and settings.rate_limit_per_domain_s > 0:
-        await domain_wait(
-            redis, host_of(row.start_url), settings.rate_limit_per_domain_s
-        )
 
     llm = ChatOpenAI(model=settings.openai_model, api_key=settings.openai_api_key)
 
@@ -174,18 +181,19 @@ async def run_task(task_id: str, redis=None) -> None:
     async def on_step(browser_state, agent_output, step_n: int) -> None:
         url = browser_state.url or ""
         state["current_url"] = url
+        n = step_n + state["step_offset"]
         with tracer().start_as_current_span(
             "task.step",
             attributes={
                 "task.id": task_id,
-                "step.n": step_n,
+                "step.n": n,
                 "step.url": url,
                 "step.actions": ",".join(_action_names(agent_output)),
             },
         ):
-            await _on_step_inner(browser_state, agent_output, step_n, url)
+            await _on_step_inner(browser_state, agent_output, n, url)
 
-    async def _on_step_inner(browser_state, agent_output, step_n: int, url: str) -> None:
+    async def _on_step_inner(browser_state, agent_output, n: int, url: str) -> None:
         if allowed_domains and not _host_matches(url, allowed_domains):
             state["domain_blocked"] = True
             logger.warning("Task %s: domain blocked at %s", task_id, url)
@@ -229,11 +237,11 @@ async def run_task(task_id: str, redis=None) -> None:
         duration_ms = int((now - state["last_step_ts"]) * 1000)
         state["last_step_ts"] = now
         await emit(
-            "step", n=step_n, url=url, actions_json=json.dumps(actions),
+            "step", n=n, url=url, actions_json=json.dumps(actions),
             duration_ms=duration_ms,
         )
         step = StepRecord(
-            n=step_n,
+            n=n,
             url=url,
             title=browser_state.title or "",
             actions=actions,
@@ -247,7 +255,7 @@ async def run_task(task_id: str, redis=None) -> None:
             step,
             getattr(browser_state, "screenshot", None),
         )
-        await db.arun(db.update_task, task_id, steps_taken=step_n)
+        await db.arun(db.update_task, task_id, steps_taken=n)
 
     async def on_done(history) -> None:
         logger.info("Task %s done callback: %d steps", task_id, len(history.agent_steps()))
@@ -278,12 +286,7 @@ async def run_task(task_id: str, redis=None) -> None:
     original_act = agent.tools.act
 
     async def traced_act(*args, **kwargs):
-        name = "unknown"
-        try:
-            dumped = args[0].model_dump(exclude_unset=True) if args else {}
-            name = next(iter(dumped.keys()), type(args[0]).__name__ if args else "?")
-        except Exception:
-            pass
+        name = _action_name(args[0]) if args else "?"
         with tracer().start_as_current_span(
             "task.action",
             attributes={"task.id": task_id, "action.name": name},

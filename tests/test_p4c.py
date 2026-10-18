@@ -99,6 +99,16 @@ def test_domain_wait_disabled_and_no_host():
     assert redis.store == {}
 
 
+def test_events_limit_bounded():
+    from cortex.store import db
+
+    db.init_db()
+    row, _ = db.create_task(TaskRequest(task="limit check"))
+    with TestClient(app) as client:
+        assert client.get(f"/tasks/{row.id}/events", params={"limit": 99999}).status_code == 422
+        assert client.get(f"/tasks/{row.id}/events", params={"limit": 5}).status_code == 200
+
+
 def test_domain_wait_redis_failure_tolerated():
     class _Broken:
         async def get(self, key):

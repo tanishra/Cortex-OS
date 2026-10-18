@@ -213,6 +213,8 @@ async def task_startup(ctx: dict) -> None:
     # orphan (no agent can legitimately be running). Kill them BEFORE
     # re-queueing so resumed tasks don't hit a stale SingletonLock.
     # Session-worker headed browsers are protected via the session lock.
+    # CONSTRAINT: exactly one task-worker process per shared profiles dir —
+    # a second worker's boot would kill the first's live task browsers.
     locked = await db.arun(db.locked_session_ids)
     killed = kill_orphan_browsers(settings.browser_profiles_dir, locked)
 
@@ -223,7 +225,8 @@ async def task_startup(ctx: dict) -> None:
         checkpoint = await build_checkpoint(row)
         await db.arun(db.update_task, task_id, resume_from=checkpoint)
         if redis is not None:
-            await redis.enqueue_job("run_task_job", task_id)
+            # _job_id dedupes concurrent worker boots — arq skips a live dupe.
+            await redis.enqueue_job("run_task_job", task_id, _job_id=f"resume:{task_id}")
 
     logger.info(
         "Worker started, concurrency=%d, resumed=%d, orphans_killed=%d",
