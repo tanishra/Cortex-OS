@@ -19,6 +19,7 @@ from cortex.logging import setup_logging
 from cortex.models import TaskStatus
 from cortex.store import db
 from cortex.store.db import init_db
+from cortex.telemetry import init_tracing
 
 setup_logging()
 logger = logging.getLogger("cortex.worker")
@@ -207,6 +208,7 @@ async def task_startup(ctx: dict) -> None:
     from cortex.engine.orphans import kill_orphan_browsers
 
     await db.arun(init_db)
+    init_tracing("cortex-worker", settings.otel_exporter_otlp_endpoint)
     # At task-worker startup, ANY browser proc on our profile dirs is an
     # orphan (no agent can legitimately be running). Kill them BEFORE
     # re-queueing so resumed tasks don't hit a stale SingletonLock.
@@ -234,6 +236,7 @@ async def task_startup(ctx: dict) -> None:
 async def session_startup(ctx: dict) -> None:
     """Session worker boot: init only — never sweeps tasks it doesn't own."""
     await db.arun(init_db)
+    init_tracing("cortex-worker-sessions", settings.otel_exporter_otlp_endpoint)
 
 
 class WorkerSettings:

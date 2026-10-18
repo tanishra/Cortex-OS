@@ -17,6 +17,7 @@ from cortex.engine.retry import TransientTaskError, classify
 from cortex.models import StepRecord, TaskStatus, utcnow
 from cortex.notify import notify_human
 from cortex.store import artifacts, db
+from cortex.telemetry import tracer
 from cortex.utils import spawn
 from cortex.vault import credentials
 
@@ -173,6 +174,18 @@ async def run_task(task_id: str, redis=None) -> None:
     async def on_step(browser_state, agent_output, step_n: int) -> None:
         url = browser_state.url or ""
         state["current_url"] = url
+        with tracer().start_as_current_span(
+            "task.step",
+            attributes={
+                "task.id": task_id,
+                "step.n": step_n,
+                "step.url": url,
+                "step.actions": ",".join(_action_names(agent_output)),
+            },
+        ):
+            await _on_step_inner(browser_state, agent_output, step_n, url)
+
+    async def _on_step_inner(browser_state, agent_output, step_n: int, url: str) -> None:
         if allowed_domains and not _host_matches(url, allowed_domains):
             state["domain_blocked"] = True
             logger.warning("Task %s: domain blocked at %s", task_id, url)
@@ -261,6 +274,24 @@ async def run_task(task_id: str, redis=None) -> None:
     agent_holder["agent"] = agent
     _RUNNING[task_id] = {"agent": agent, "state": state}
 
+    # Tracing wrapper is always installed — near-zero cost with no-op tracer.
+    original_act = agent.tools.act
+
+    async def traced_act(*args, **kwargs):
+        name = "unknown"
+        try:
+            dumped = args[0].model_dump(exclude_unset=True) if args else {}
+            name = next(iter(dumped.keys()), type(args[0]).__name__ if args else "?")
+        except Exception:
+            pass
+        with tracer().start_as_current_span(
+            "task.action",
+            attributes={"task.id": task_id, "action.name": name},
+        ):
+            return await original_act(*args, **kwargs)
+
+    agent.tools.act = traced_act
+
     if approval_actions:
         agent.tools.act = make_action_gate(
             task_id,
@@ -277,7 +308,15 @@ async def run_task(task_id: str, redis=None) -> None:
         budget = row.max_steps or settings.max_steps
         if resume:
             budget = max(1, budget - row.steps_taken)
-        history = await agent.run(max_steps=budget)
+        with tracer().start_as_current_span(
+            "task.run",
+            attributes={
+                "task.id": task_id,
+                "task.session_id": row.session_id or "",
+                "task.resumed": bool(resume),
+            },
+        ):
+            history = await agent.run(max_steps=budget)
 
         if state["domain_blocked"]:
             await set_status(

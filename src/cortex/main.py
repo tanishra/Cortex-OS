@@ -20,6 +20,7 @@ from cortex.ports.registry import get_backend
 from cortex.store import db
 from cortex.store.db import init_db
 from cortex.store.queue import NullJobQueue
+from cortex.telemetry import init_tracing, shutdown_tracing
 
 setup_logging()
 logger = logging.getLogger("cortex.main")
@@ -29,11 +30,17 @@ logger = logging.getLogger("cortex.main")
 async def lifespan(app: FastAPI):
     init_db()
     db.seed_api_keys(settings.api_keys.split(","))
+    init_tracing("cortex-api", settings.otel_exporter_otlp_endpoint)
+    if settings.otel_exporter_otlp_endpoint:
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+        FastAPIInstrumentor.instrument_app(app)
     queue = get_backend("queue")
     await queue.connect()
     app.state.queue = queue if queue.available() else NullJobQueue()
     yield
     await app.state.queue.aclose()
+    await shutdown_tracing()
 
 
 app = FastAPI(

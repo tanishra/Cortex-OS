@@ -70,6 +70,16 @@ services:
       initialBuckets: cortex-artifacts
       root: /tmp
 
+  # Optional tracing UI: docker compose --profile tracing up
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    profiles: ["tracing"]
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "127.0.0.1:16686:16686"  # UI
+      - "127.0.0.1:4318:4318"    # OTLP/HTTP — set OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
+
 volumes:
   pgdata:
   profiles:

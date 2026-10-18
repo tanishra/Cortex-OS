@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     backpressure_retry_after_s: int = 30
     # 0 = off; min seconds between task starts per start_url host
     rate_limit_per_domain_s: float = 0.0
+    # OTLP/HTTP base, e.g. http://jaeger:4318 — empty = tracing off
+    otel_exporter_otlp_endpoint: str = ""
 
     require_api_key: bool = False
     api_keys: str = ""  # comma-separated
