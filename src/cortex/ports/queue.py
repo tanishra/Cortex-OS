@@ -16,6 +16,10 @@ class JobQueue(ABC):
         """Enqueue a named job for the worker. False if queue unavailable."""
 
     @abstractmethod
+    async def queue_depth(self, queue_name: str | None = None) -> int | None:
+        """Pending jobs in the named queue (default: main). None if unknown."""
+
+    @abstractmethod
     def available(self) -> bool: ...
 
     @abstractmethod

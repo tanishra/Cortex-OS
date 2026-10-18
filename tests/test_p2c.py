@@ -82,6 +82,9 @@ def test_open_session_enqueues_on_sessions_queue():
         def available(self):
             return True
 
+        async def queue_depth(self, queue_name=None):
+            return None
+
         async def aclose(self):
             pass
 

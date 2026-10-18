@@ -126,5 +126,34 @@ class ApiKeyInfo(BaseModel):
     last_used_at: datetime | None = None
 
 
+class TaskEventResponse(BaseModel):
+    id: str
+    task_id: str
+    kind: str
+    n: int | None = None
+    url: str | None = None
+    actions: list[str] = Field(default_factory=list)
+    duration_ms: int | None = None
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    cost_usd: float | None = None
+    payload: dict | None = None
+    created_at: datetime
+
+
+class StatsResponse(BaseModel):
+    tasks_total: int
+    by_status: dict[str, int]
+    success_rate: float | None = None
+    avg_steps: float | None = None
+    avg_duration_s: float | None = None
+    tokens_in_total: int | None = None
+    tokens_out_total: int | None = None
+    cost_usd_total: float | None = None
+    running_now: int = 0
+    queue_depth: int | None = None
+    session_queue_depth: int | None = None
+
+
 class ErrorResponse(BaseModel):
     detail: str

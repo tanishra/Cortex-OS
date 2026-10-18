@@ -16,6 +16,9 @@ class _SpyQueue(JobQueue):
     def available(self):
         return True
 
+    async def queue_depth(self, queue_name=None):
+        return None
+
     async def aclose(self):
         pass
 

@@ -11,6 +11,7 @@ from cortex.api import (
     routes_approvals,
     routes_artifacts,
     routes_sessions,
+    routes_stats,
     routes_tasks,
 )
 from cortex.config import settings
@@ -50,6 +51,7 @@ app.include_router(routes_artifacts.router)
 app.include_router(routes_sessions.router)
 app.include_router(routes_approvals.router)
 app.include_router(routes_admin.router)
+app.include_router(routes_stats.router)
 
 PUBLIC_PATHS = {"/health", "/ready", "/docs", "/openapi.json", "/redoc"}
 

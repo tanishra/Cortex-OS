@@ -1,8 +1,15 @@
+import json
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
-from cortex.models import ErrorResponse, TaskRequest, TaskResponse, TaskStatus
+from cortex.models import (
+    ErrorResponse,
+    TaskEventResponse,
+    TaskRequest,
+    TaskResponse,
+    TaskStatus,
+)
 from cortex.store import db
 from cortex.store.db import TaskRow
 
@@ -88,6 +95,34 @@ async def cancel_task(task_id: str) -> TaskResponse:
     else:
         row = await db.arun(db.request_cancel, task_id)
     return _to_response(row)  # type: ignore[arg-type]
+
+
+@router.get(
+    "/{task_id}/events",
+    response_model=list[TaskEventResponse],
+    responses={404: {"model": ErrorResponse}},
+)
+async def get_task_events(task_id: str, limit: int = 1000) -> list[TaskEventResponse]:
+    if not await db.arun(db.task_exists, task_id):
+        raise HTTPException(status_code=404, detail="task not found")
+    rows = await db.arun(db.list_events, task_id, limit)
+    return [
+        TaskEventResponse(
+            id=r.id,
+            task_id=r.task_id,
+            kind=r.kind,
+            n=r.n,
+            url=r.url,
+            actions=json.loads(r.actions_json or "[]"),
+            duration_ms=r.duration_ms,
+            tokens_in=r.tokens_in,
+            tokens_out=r.tokens_out,
+            cost_usd=r.cost_usd,
+            payload=json.loads(r.payload_json) if r.payload_json else None,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
 
 
 @router.post(

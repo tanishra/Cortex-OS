@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from urllib.parse import urlparse
 
 from browser_use import Agent, Browser, BrowserProfile, ChatOpenAI
@@ -117,12 +118,23 @@ async def run_task(task_id: str) -> None:
         "current_url": row.start_url or "",
         "status": TaskStatus.QUEUED,
         "approval_pending": False,
+        "last_step_ts": time.monotonic(),
     }
     agent_holder: dict = {}
+
+    async def emit(kind: str, **fields) -> None:
+        """Telemetry write — must never break task execution."""
+        try:
+            await db.arun(db.record_event, task_id, kind, **fields)
+        except Exception:
+            logger.warning(
+                "Task %s: failed to record %s event", task_id, kind, exc_info=True
+            )
 
     async def set_status(status: TaskStatus, **fields) -> None:
         await db.arun(db.update_task, task_id, status=status, **fields)
         state["status"] = status
+        await emit("status", payload_json=json.dumps({"to": str(status)}))
 
     llm = ChatOpenAI(model=settings.openai_model, api_key=settings.openai_api_key)
 
@@ -176,11 +188,19 @@ async def run_task(task_id: str) -> None:
             logger.info("Task %s: approval requested for %s", task_id, url)
             spawn(notify_human(task_id, url, "approval_domain"))
 
+        actions = _action_names(agent_output)
+        now = time.monotonic()
+        duration_ms = int((now - state["last_step_ts"]) * 1000)
+        state["last_step_ts"] = now
+        await emit(
+            "step", n=step_n, url=url, actions_json=json.dumps(actions),
+            duration_ms=duration_ms,
+        )
         step = StepRecord(
             n=step_n,
             url=url,
             title=browser_state.title or "",
-            actions=_action_names(agent_output),
+            actions=actions,
             evaluation=getattr(agent_output, "evaluation_previous_goal", None),
             memory=getattr(agent_output, "memory", None),
             next_goal=getattr(agent_output, "next_goal", None),
@@ -256,6 +276,18 @@ async def run_task(task_id: str) -> None:
 
         final = history.final_result()
         success = history.is_successful()
+        usage = getattr(history, "usage", None)
+        await emit(
+            "finished",
+            tokens_in=getattr(usage, "total_prompt_tokens", None),
+            tokens_out=getattr(usage, "total_completion_tokens", None),
+            cost_usd=(
+                getattr(usage, "total_prompt_cost", 0.0)
+                + getattr(usage, "total_completion_cost", 0.0)
+            )
+            if usage
+            else None,
+        )
         await set_status(
             TaskStatus.DONE if success else TaskStatus.FAILED,
             result=str(final) if final is not None else None,
@@ -270,6 +302,7 @@ async def run_task(task_id: str) -> None:
 
     except Exception as exc:
         logger.exception("Task %s crashed", task_id)
+        await emit("error", payload_json=json.dumps({"error": type(exc).__name__}))
         await set_status(TaskStatus.FAILED, error=f"{type(exc).__name__}: {exc}")
     finally:
         _RUNNING.pop(task_id, None)

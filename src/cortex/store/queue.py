@@ -30,6 +30,9 @@ class NullJobQueue(JobQueue):
     def available(self) -> bool:
         return False
 
+    async def queue_depth(self, queue_name: str | None = None) -> int | None:
+        return None
+
     async def aclose(self) -> None:
         pass
 
@@ -64,6 +67,13 @@ class ArqJobQueue(JobQueue):
             kwargs["_defer_by"] = timedelta(milliseconds=defer_ms)
         await self._pool.enqueue_job(job, *args, **kwargs)
         return True
+
+    async def queue_depth(self, queue_name: str | None = None) -> int | None:
+        if self._pool is None:
+            return None
+        from arq.constants import default_queue_name
+
+        return await self._pool.zcard(queue_name or default_queue_name)
 
     def available(self) -> bool:
         return self._pool is not None

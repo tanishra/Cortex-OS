@@ -87,6 +87,21 @@ class ApprovalRow(SQLModel, table=True):
     resolved_at: datetime | None = None
 
 
+class TaskEventRow(SQLModel, table=True):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex, primary_key=True)
+    task_id: str = Field(index=True)
+    kind: str  # status | step | finished | error
+    n: int | None = None  # step number for kind=step
+    url: str | None = None
+    actions_json: str = "[]"
+    duration_ms: int | None = None
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    cost_usd: float | None = None
+    payload_json: str | None = None  # extra context (status value, error class)
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 def _engine_url() -> str:
     """Normalize the configured URL — 'postgresql://' gets the psycopg3 driver."""
     url = settings.database_url
@@ -128,11 +143,18 @@ def _migrate() -> None:
     from sqlalchemy import inspect
 
     inspector = inspect(_ENGINE)
-    tables = inspector.get_table_names()
+    tables = set(inspector.get_table_names())
     cfg = _alembic_cfg()
     if tables and "alembic_version" not in tables:
-        command.stamp(cfg, "head")
-        logger.info("Stamped legacy database at head (alembic adoption)")
+        # Adopt a pre-alembic schema: stamp at the newest revision whose
+        # tables already exist, then upgrade the remainder.
+        expected = set(SQLModel.metadata.tables)
+        if expected <= tables:
+            command.stamp(cfg, "head")
+        else:
+            command.stamp(cfg, "6bb98e8fe624")
+            command.upgrade(cfg, "head")
+        logger.info("Stamped legacy database (alembic adoption)")
     else:
         command.upgrade(cfg, "head")
 
@@ -583,3 +605,74 @@ def disable_api_key(key_id: str) -> bool:
         s.add(row)
         s.commit()
         return True
+
+
+# --- task events ---
+
+
+def record_event(task_id: str, kind: str, **fields: Any) -> None:
+    """Append a telemetry event for a task. Never raises — callers treat
+    events as observability, not control flow."""
+    with Session(_ENGINE) as s:
+        s.add(TaskEventRow(task_id=task_id, kind=kind, **fields))
+        s.commit()
+
+
+def list_events(task_id: str, limit: int = 1000) -> list[TaskEventRow]:
+    with Session(_ENGINE) as s:
+        return list(
+            s.exec(
+                select(TaskEventRow)
+                .where(TaskEventRow.task_id == task_id)
+                .order_by(TaskEventRow.created_at, TaskEventRow.n)  # type: ignore[attr-defined]
+                .limit(limit)
+            ).all()
+        )
+
+
+def task_stats() -> dict[str, Any]:
+    """Aggregates for the /stats endpoint."""
+    with Session(_ENGINE) as s:
+        rows = s.exec(select(TaskRow.status, TaskRow.steps_taken)).all()
+        by_status: dict[str, int] = {}
+        done_steps: list[int] = []
+        for status, steps in rows:
+            by_status[status] = by_status.get(status, 0) + 1
+            if status == TaskStatus.DONE:
+                done_steps.append(steps)
+        done_durations = [
+            (r.updated_at - r.created_at).total_seconds()
+            for r in s.exec(
+                select(TaskRow).where(TaskRow.status == TaskStatus.DONE)
+            ).all()
+        ]
+        finished = s.exec(
+            select(
+                TaskEventRow.tokens_in,
+                TaskEventRow.tokens_out,
+                TaskEventRow.cost_usd,
+            ).where(TaskEventRow.kind == "finished")
+        ).all()
+
+    terminal = sum(by_status.get(st, 0) for st in TERMINAL_STATUSES)
+    return {
+        "tasks_total": len(rows),
+        "by_status": by_status,
+        "success_rate": (by_status.get(TaskStatus.DONE, 0) / terminal) or None,
+        "avg_steps": (sum(done_steps) / len(done_steps)) if done_steps else None,
+        "avg_duration_s": (
+            sum(done_durations) / len(done_durations)
+            if done_durations
+            else None
+        ),
+        "tokens_in_total": (
+            sum(t) if (t := [x for x, _, _ in finished if x is not None]) else None
+        ),
+        "tokens_out_total": (
+            sum(o) if (o := [x for _, x, _ in finished if x is not None]) else None
+        ),
+        "cost_usd_total": (
+            sum(c) if (c := [x for _, _, x in finished if x is not None]) else None
+        ),
+        "running_now": by_status.get(TaskStatus.RUNNING, 0),
+    }
