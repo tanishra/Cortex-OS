@@ -3,6 +3,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
+from cortex.config import settings
 from cortex.models import (
     ErrorResponse,
     TaskEventResponse,
@@ -43,6 +44,13 @@ _PRIORITY_DEFER_MS = {"high": -3_600_000, "normal": None, "low": 60_000}
     responses={400: {"model": ErrorResponse}},
 )
 async def create_task(req: TaskRequest, request: Request) -> TaskResponse:
+    depth = await request.app.state.queue.queue_depth()
+    if depth is not None and depth >= settings.max_queued_tasks:
+        raise HTTPException(
+            status_code=429,
+            detail="queue_full: too many queued tasks, retry later",
+            headers={"Retry-After": str(settings.backpressure_retry_after_s)},
+        )
     if req.session_id:
         session = await db.arun(db.get_session, req.session_id)
         if not session:

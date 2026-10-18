@@ -10,6 +10,7 @@ from browser_use import Agent, Browser, BrowserProfile, ChatOpenAI
 from cortex.config import settings
 from cortex.engine.escalation import detect_human_wall
 from cortex.engine.gates import make_action_gate
+from cortex.engine.limits import domain_wait, host_of
 from cortex.engine.prompts import SAFETY_EXTENSION
 from cortex.engine.retry import TransientTaskError, classify
 from cortex.models import StepRecord, TaskStatus, utcnow
@@ -76,7 +77,7 @@ def _detect_wall(task_id: str, browser_state, agent_output) -> str | None:
     )
 
 
-async def run_task(task_id: str) -> None:
+async def run_task(task_id: str, redis=None) -> None:
     """Execute one queued task end-to-end. Updates DB status and writes artifacts."""
     row = await db.arun(db.get_task, task_id)
     if not row:
@@ -138,6 +139,11 @@ async def run_task(task_id: str) -> None:
         await db.arun(db.update_task, task_id, status=status, **fields)
         state["status"] = status
         await emit("status", payload_json=json.dumps({"to": str(status)}))
+
+    if redis is not None and settings.rate_limit_per_domain_s > 0:
+        await domain_wait(
+            redis, host_of(row.start_url), settings.rate_limit_per_domain_s
+        )
 
     llm = ChatOpenAI(model=settings.openai_model, api_key=settings.openai_api_key)
 

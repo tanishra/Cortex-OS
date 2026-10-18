@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     worker_concurrency: int = 2
     task_max_retries: int = 4  # total attempts including the first
     task_retry_base_s: float = 2.0  # backoff: base * 2^(attempt-1), capped at 60s
+    max_queued_tasks: int = 100  # POST /tasks → 429 when arq backlog exceeds this
+    backpressure_retry_after_s: int = 30
+    # 0 = off; min seconds between task starts per start_url host
+    rate_limit_per_domain_s: float = 0.0
 
     require_api_key: bool = False
     api_keys: str = ""  # comma-separated

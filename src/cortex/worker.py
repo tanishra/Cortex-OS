@@ -60,7 +60,9 @@ async def _maybe_retry(ctx: dict, task_id: str, error: str) -> None:
 async def run_task_job(ctx: dict, task_id: str) -> None:
     logger.info("Worker picked up task %s (try %s)", task_id, ctx.get("job_try", 1))
     try:
-        await asyncio.wait_for(run_task(task_id), timeout=settings.task_timeout_s)
+        await asyncio.wait_for(
+            run_task(task_id, redis=ctx.get("redis")), timeout=settings.task_timeout_s
+        )
     except TransientTaskError as exc:
         await _maybe_retry(ctx, task_id, str(exc))
     except TimeoutError:
