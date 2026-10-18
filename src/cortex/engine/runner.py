@@ -143,9 +143,11 @@ async def run_task(task_id: str, redis=None) -> None:
         "status": TaskStatus.QUEUED,
         "approval_pending": False,
         "last_step_ts": time.monotonic(),
-        # Resumed agents count steps from 1 again — offset keeps DB count
-        # and artifact filenames monotonic (no clobber of prior evidence).
-        "step_offset": row.steps_taken if resume else 0,
+        # Any fresh agent (resume OR retry attempt) counts steps from 1 —
+        # offset keeps DB count + artifact filenames monotonic.
+        "step_offset": row.steps_taken,
+        "steps_done": row.steps_taken,
+        "recent_goals": [],
     }
     agent_holder: dict = {}
 
@@ -182,6 +184,10 @@ async def run_task(task_id: str, redis=None) -> None:
         url = browser_state.url or ""
         state["current_url"] = url
         n = step_n + state["step_offset"]
+        state["steps_done"] = n
+        goal = getattr(agent_output, "next_goal", None)
+        if goal:
+            state["recent_goals"] = (state["recent_goals"] + [f"step {n}: {goal}"])[-3:]
         with tracer().start_as_current_span(
             "task.step",
             attributes={
@@ -372,6 +378,16 @@ async def run_task(task_id: str, redis=None) -> None:
         logger.exception("Task %s crashed", task_id)
         await emit("error", payload_json=json.dumps({"error": type(exc).__name__}))
         if classify(exc) == "transient":
+            # Persist a live checkpoint so the retry attempt resumes warm —
+            # otherwise a crashed run restarts cold after one resume.
+            checkpoint = {
+                "last_url": state["current_url"],
+                "steps_taken": state["steps_done"],
+                "summary": "\n".join(state["recent_goals"]),
+            }
+            await db.arun(
+                db.update_task, task_id, resume_from=json.dumps(checkpoint)
+            )
             raise TransientTaskError(f"{type(exc).__name__}: {exc}") from exc
         await set_status(TaskStatus.FAILED, error=f"{type(exc).__name__}: {exc}")
     finally:

@@ -1,6 +1,7 @@
 """arq worker entrypoint: consumes task jobs and runs the browser agent."""
 
 import asyncio
+import json
 import logging
 import shutil
 import time
@@ -34,6 +35,14 @@ async def _maybe_retry(ctx: dict, task_id: str, error: str) -> None:
             60,
         )
         await db.arun(
+            db.record_event,
+            task_id,
+            "status",
+            payload_json=json.dumps(
+                {"to": "queued", "reason": "retry", "attempt": attempt}
+            ),
+        )
+        await db.arun(
             db.update_task,
             task_id,
             status=TaskStatus.QUEUED,
@@ -48,6 +57,14 @@ async def _maybe_retry(ctx: dict, task_id: str, error: str) -> None:
             delay,
         )
         raise Retry(defer=delay)
+    await db.arun(
+        db.record_event,
+        task_id,
+        "status",
+        payload_json=json.dumps(
+            {"to": "failed", "reason": "dead_letter", "attempt": attempt}
+        ),
+    )
     await db.arun(
         db.update_task,
         task_id,

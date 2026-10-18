@@ -692,6 +692,8 @@ def task_stats() -> dict[str, Any]:
         "by_status": by_status,
         "success_rate": (by_status.get(TaskStatus.DONE, 0) / terminal) or None,
         "avg_steps": (sum(done_steps) / len(done_steps)) if done_steps else None,
+        # Wall-clock create→update for done tasks — includes queue wait and
+        # human-approval pauses, not pure execution time.
         "avg_duration_s": (
             sum(done_durations) / len(done_durations)
             if done_durations
