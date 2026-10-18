@@ -83,6 +83,35 @@ def _detect_wall(task_id: str, browser_state, agent_output) -> str | None:
 
 async def run_task(task_id: str, redis=None) -> None:
     """Execute one queued task end-to-end. Updates DB status and writes artifacts."""
+    try:
+        await _run_task(task_id, redis=redis)
+    except TransientTaskError:
+        raise
+    except Exception as exc:
+        # Setup-phase crash (profile mkdir, browser/agent construction, DB
+        # reads) — before the inner try exists. Classify + record so the
+        # task never stays stuck 'queued'.
+        logger.exception("Task %s crashed during setup", task_id)
+        try:
+            await db.arun(
+                db.record_event,
+                task_id,
+                "error",
+                payload_json=json.dumps({"error": type(exc).__name__}),
+            )
+        except Exception:
+            pass
+        if classify(exc) == "transient":
+            raise TransientTaskError(f"{type(exc).__name__}: {exc}") from exc
+        await db.arun(
+            db.update_task,
+            task_id,
+            status=TaskStatus.FAILED,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
+
+async def _run_task(task_id: str, redis=None) -> None:
     row = await db.arun(db.get_task, task_id)
     if not row:
         logger.error("run_task called for unknown task %s", task_id)

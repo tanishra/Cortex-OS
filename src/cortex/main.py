@@ -47,10 +47,18 @@ app = FastAPI(
     title="Cortex-OS",
     description=(
         "Production-grade browser agent service — submit tasks in plain English, "
-        "executed by browser-use."
+        "executed by browser-use with sessions, approvals, retries, and audit events."
     ),
     version="0.1.0",
     lifespan=lifespan,
+    openapi_tags=[
+        {"name": "tasks", "description": "Submit, inspect, cancel, and audit browser tasks."},
+        {"name": "artifacts", "description": "Step JSON, screenshots, and replay data per task."},
+        {"name": "sessions", "description": "Named profiles w/ login + credential vault."},
+        {"name": "approvals", "description": "Human-in-the-loop gates for domains and actions."},
+        {"name": "admin", "description": "API-key lifecycle (create, list, revoke)."},
+        {"name": "ops", "description": "Health, readiness, and aggregate stats."},
+    ],
 )
 
 app.include_router(routes_tasks.router)
@@ -76,11 +84,11 @@ async def api_key_auth(request: Request, call_next):
     return await call_next(request)
 
 
-@app.get("/health")
+@app.get("/health", tags=["ops"], summary="Liveness probe")
 async def health() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/ready")
+@app.get("/ready", tags=["ops"], summary="Readiness probe (includes queue availability)")
 async def ready() -> dict:
     return {"status": "ready", "queue": app.state.queue.available()}

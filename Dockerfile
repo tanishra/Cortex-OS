@@ -6,6 +6,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*
 
+# Non-root runtime user — owns the app dir, profile/artifact dirs, and
+# the chromium cache it downloads.
+RUN groupadd -r cortex && useradd -r -g cortex -m cortex
+
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 WORKDIR /app
 
@@ -15,10 +19,20 @@ COPY src ./src
 COPY README.md ./
 COPY alembic ./alembic
 COPY alembic.ini ./
-RUN uv sync --frozen --no-dev
 
-# Pre-bake Chromium into the image (~/.cache/puppeteer).
-RUN uv run browser-use install chromium
+# Named docker volumes initialize ownership from these dirs — they must
+# exist and be cortex-owned before mount.
+RUN mkdir -p /app/profiles /app/artifacts \
+ && uv sync --frozen --no-dev \
+ && chown -R cortex:cortex /app
+
+# Pre-bake Chromium — the installer escalates for system deps, so it must
+# run as root; the binary cache is then moved into cortex's home.
+RUN uv run browser-use install chromium \
+ && cp -r /root/.cache /home/cortex/.cache \
+ && chown -R cortex:cortex /home/cortex/.cache
+
+USER cortex
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1

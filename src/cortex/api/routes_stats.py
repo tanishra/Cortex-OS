@@ -7,7 +7,7 @@ from cortex.models import StatsResponse
 from cortex.store import db
 
 logger = logging.getLogger("cortex.api.stats")
-router = APIRouter(tags=["stats"])
+router = APIRouter(tags=["ops"])
 
 
 @router.get("/stats", response_model=StatsResponse)

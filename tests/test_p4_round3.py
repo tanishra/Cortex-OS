@@ -111,6 +111,26 @@ def test_human_resume_emits_event():
     runner._RUNNING.pop(row.id, None)
 
 
+def test_setup_phase_crash_fails_task(monkeypatch, tmp_path):
+    """Crash before the inner try (e.g. profile mkdir) → failed, not stuck."""
+    db.init_db()
+    row, _ = db.create_task(TaskRequest(task="setup crash"))
+    monkeypatch.setattr(
+        runner.settings, "browser_profiles_dir", tmp_path / "nonexistent/deep"
+    )
+    # Make mkdir fail deterministically.
+    import pathlib
+
+    def _denied(self, mode=0o777, parents=False, exist_ok=False):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(pathlib.Path, "mkdir", _denied)
+    asyncio.run(runner.run_task(row.id))
+    updated = db.get_task(row.id)
+    assert updated.status == TaskStatus.FAILED
+    assert "PermissionError" in updated.error
+
+
 def test_wall_renotify_suppressed_after_resume(monkeypatch):
     """Resumed-from-waiting_human: first wall re-detection pauses silently."""
     db.init_db()
