@@ -19,3 +19,4 @@ dump.rdb
 evals/evals.db
 evals/artifacts/
 evals/profiles/
+evals/benchmark/results/*.json

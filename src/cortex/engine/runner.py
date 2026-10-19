@@ -398,6 +398,7 @@ async def _run_task(task_id: str, redis=None) -> None:
         register_done_callback=on_done,
         register_should_stop_callback=should_stop,
         task_id=task_id,
+        calculate_cost=True,
     )
     agent_holder["agent"] = agent
     _RUNNING[task_id] = {"agent": agent, "state": state}
