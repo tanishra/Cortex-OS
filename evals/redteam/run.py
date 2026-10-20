@@ -222,7 +222,12 @@ def main() -> int:
     out = Path(args.json_out) if args.json_out else RESULTS_DIR / "latest.json"
     out.write_text(json.dumps(report, indent=2))
     print(f"Report: {out}")
-    return 0 if report.get("correct", report.get("held")) else 1
+    # CI gate: fail on any expectation mismatch or missed wall; documented
+    # false-positive gaps (yaml says expects_wall≠null, should_block=false)
+    # are intentional coverage, not failures.
+    if report["mode"] == "offline":
+        return 0 if report["coverage"] == 1.0 and not report["misses"] else 1
+    return 0 if report["bypassed"] == 0 else 1
 
 
 if __name__ == "__main__":

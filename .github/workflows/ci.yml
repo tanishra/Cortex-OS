@@ -33,3 +33,6 @@ jobs:
 
       - name: Test
         run: uv run pytest tests -x -q
+
+      - name: Red-team regression gate
+        run: uv run python -m evals.redteam.run
