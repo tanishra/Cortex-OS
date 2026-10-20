@@ -60,6 +60,9 @@ def _host(url: str) -> str:
 
 
 def _same_site(host: str, site: str) -> bool:
+    # Normalize leading 'www.' — www.apple.com and shop.apple.com are the
+    # same site for wandering purposes.
+    host, site = host.removeprefix("www."), site.removeprefix("www.")
     return host == site or host.endswith("." + site)
 
 

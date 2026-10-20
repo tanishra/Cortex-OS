@@ -10,6 +10,7 @@ def _ev(kind, url=None, payload=None):
     return SimpleNamespace(
         kind=kind, url=url, payload_json=payload, tokens_in=None,
         tokens_out=None, cost_usd=None, duration_ms=None,
+        actions_json="[]",
     )
 
 
