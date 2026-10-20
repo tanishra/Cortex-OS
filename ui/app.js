@@ -1,9 +1,9 @@
 /* CORTEX-OS Flight Recorder — vanilla SPA over the REST API. */
 
 const $ = (id) => document.getElementById(id);
+const { api, esc, ago, chip, loadImage } = window.cortex;
 
 const state = {
-  key: localStorage.getItem("cortex_api_key") || "",
   tasks: [],
   selected: null,
   pollTimer: null,
@@ -11,59 +11,18 @@ const state = {
 
 const ACTIVE = new Set(["queued", "running", "waiting_approval", "waiting_human"]);
 
-function api(path, opts = {}) {
-  return fetch(path, {
-    ...opts,
-    headers: { "x-api-key": state.key, "Content-Type": "application/json", ...(opts.headers || {}) },
-  }).then((r) => {
-    if (r.status === 401 || r.status === 403) throw new Error("unauthorized");
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r.status === 204 ? null : r.json();
-  });
-}
-
-function ago(iso) {
-  const s = Math.floor((Date.now() - new Date(iso)) / 1000);
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h`;
-  return `${Math.floor(s / 86400)}d`;
-}
-
-function esc(s) {
-  return (s || "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-}
-
-const _imgCache = new Map();
-function loadImage(path) {
-  if (_imgCache.has(path)) return Promise.resolve(_imgCache.get(path));
-  return fetch(path, { headers: { "x-api-key": state.key } })
-    .then((r) => (r.ok ? r.blob() : null))
-    .then((b) => {
-      if (!b) return null;
-      const url = URL.createObjectURL(b);
-      _imgCache.set(path, url);
-      return url;
-    })
-    .catch(() => null);
-}
-
-function chip(status) {
-  return `<span class="chip ${esc(status)}"><span class="dot"></span>${esc(status)}</span>`;
-}
-
 /* ── key gate ── */
 function gateOpen(open) {
   $("keyGate").classList.toggle("hidden", !open);
 }
 $("keySave").onclick = () => {
-  state.key = $("keyInput").value.trim();
-  localStorage.setItem("cortex_api_key", state.key);
+  window.cortex.key = $("keyInput").value.trim();
+  localStorage.setItem("cortex_api_key", window.cortex.key);
   gateOpen(false);
   refresh();
 };
 $("keyBtn").onclick = () => {
-  $("keyInput").value = state.key;
+  $("keyInput").value = window.cortex.key;
   gateOpen(true);
 };
 

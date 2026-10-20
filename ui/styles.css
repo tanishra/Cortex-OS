@@ -352,6 +352,62 @@ input::placeholder { color: var(--ink-dim); }
 }
 .lightbox img { max-width: 92vw; max-height: 92vh; border: 1px solid var(--line); }
 
+/* ── ops page ── */
+.nav-link { text-decoration: none; display: inline-flex; align-items: center; }
+.ops-main { padding: 20px 24px; max-width: 1100px; margin: 0 auto; }
+.ops-band {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 4px;
+  margin-bottom: 16px;
+}
+.stat { padding: 14px; border-right: 1px solid var(--line); }
+.stat:last-child { border-right: none; }
+.stat-label {
+  font: 600 10px var(--sans);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin-bottom: 6px;
+}
+.stat-value { font: 600 13px var(--mono); color: var(--ink); }
+.stat.accent .stat-value { color: var(--amber); }
+.ops-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+.ops-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 16px;
+}
+.status-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.status-row:last-child { border-bottom: none; }
+.status-row .chip { width: 130px; flex-shrink: 0; }
+.status-bar {
+  flex: 1; height: 6px;
+  background: var(--panel-2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.status-fill { height: 100%; border-radius: 3px; }
+.status-fill.done { background: var(--green); }
+.status-fill.failed, .status-fill.cancelled, .status-fill.dead_letter { background: var(--red); }
+.status-fill.running, .status-fill.queued { background: var(--blue); }
+.status-fill.waiting_human, .status-fill.waiting_approval { background: var(--warn); }
+.dim { color: var(--ink-dim); }
+#queues { display: flex; gap: 24px; }
+
+@media (max-width: 860px) {
+  .ops-band { grid-template-columns: repeat(3, 1fr); }
+  .stat:nth-child(3n) { border-right: none; }
+  .ops-grid { grid-template-columns: 1fr; }
+}
+
 .hidden { display: none !important; }
 .mono { font-family: var(--mono); }
 

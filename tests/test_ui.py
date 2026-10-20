@@ -28,6 +28,16 @@ def test_app_js_has_tape_logic():
     assert "updateTape" in js and "loadImage" in js and "scrubLock" in js
 
 
+def test_ops_page_served():
+    html = TestClient(app).get("/ui/ops.html").text
+    assert "ops-main" in html and 'id="statBand"' in html
+
+
+def test_ops_js_served():
+    js = TestClient(app).get("/ui/ops.js").text
+    assert "/stats" in js and "refresh" in js
+
+
 def test_ui_is_public_but_api_still_gated(monkeypatch):
     from cortex.config import settings
 

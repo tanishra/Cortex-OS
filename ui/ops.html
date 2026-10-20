@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CORTEX-OS — Ops</title>
+<link rel="stylesheet" href="/ui/styles.css">
+</head>
+<body>
+
+<header id="topbar">
+  <div class="brand">
+    <span class="brand-name">CORTEX-OS</span>
+    <span class="rec-lamp"><span class="lamp-dot"></span>OPS</span>
+  </div>
+  <div class="topbar-right">
+    <a class="ghost-btn nav-link" href="/ui/">tasks</a>
+    <button class="ghost-btn" id="keyBtn">API key</button>
+  </div>
+</header>
+
+<div id="keyGate" class="key-gate hidden">
+  <div class="key-card">
+    <div class="key-title">API KEY REQUIRED</div>
+    <input id="keyInput" type="password" placeholder="x-api-key value" autocomplete="off">
+    <button class="primary-btn" id="keySave">Connect</button>
+    <div class="key-hint">Key is stored in this browser only.</div>
+  </div>
+</div>
+
+<main class="ops-main">
+  <div class="ops-band" id="statBand"></div>
+
+  <div class="ops-grid">
+    <section class="ops-panel">
+      <div class="label">BY STATUS</div>
+      <div id="byStatus"></div>
+    </section>
+    <section class="ops-panel">
+      <div class="label">QUEUES</div>
+      <div id="queues"></div>
+    </section>
+  </div>
+</main>
+
+<script src="/ui/common.js"></script>
+<script src="/ui/ops.js"></script>
+</body>
+</html>
