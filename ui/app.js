@@ -161,6 +161,17 @@ async function renderDetail() {
 
   renderApprovals(t.id);
   renderSteps(t.id);
+
+  // Steps move faster than status polls — refetch frames every 2s while live.
+  clearInterval(tape.ticker);
+  tape.ticker = null;
+  if (ACTIVE.has(t.status)) {
+    tape.ticker = setInterval(() => {
+      const cur = state.tasks.find((x) => x.id === state.selected);
+      if (!cur || !ACTIVE.has(cur.status)) return clearInterval(tape.ticker);
+      renderSteps(cur.id);
+    }, 2000);
+  }
 }
 
 async function act(path) {
@@ -201,11 +212,72 @@ async function respond(id, approve) {
   } catch (e) { toast(e); }
 }
 
+/* ── tape panel: live flipbook + scrub ── */
+const tape = { taskId: null, frames: [], idx: 1, scrubLock: 0, ticker: null };
+
+function showFrame(taskId, e) {
+  if (!e) return;
+  const img = `step_${String(e.n).padStart(4, "0")}.png`;
+  $("tapePos").textContent = `step ${String(e.n).padStart(3, "0")} / ${String(tape.frames.at(-1)?.n ?? e.n).padStart(3, "0")}`;
+  $("tapeUrl").textContent = e.url || "";
+  $("tapeActions").textContent = (e.actions || []).join(" · ");
+  $("tapeScrub").value = e.n;
+  loadImage(`/tasks/${taskId}/screenshots/${img}`).then((url) => {
+    if (!url) return;
+    const frame = $("tapeFrame");
+    frame.replaceChildren();
+    const im = document.createElement("img");
+    im.src = url;
+    im.alt = `step ${e.n} screenshot`;
+    frame.appendChild(im);
+  });
+}
+
+function updateTape(taskId, steps, isLive) {
+  const panel = $("tape");
+  if (!steps.length) { panel.classList.add("hidden"); return; }
+  if (tape.taskId !== taskId) {
+    tape.taskId = taskId;
+    tape.frames = [];
+    tape.scrubLock = 0;
+    delete panel.dataset.shown;
+  }
+  tape.frames = steps;
+  panel.classList.remove("hidden");
+  const scrub = $("tapeScrub");
+  scrub.max = steps.at(-1).n;
+  const lamp = $("tapeLamp");
+  lamp.innerHTML = isLive
+    ? `<span class="dot live"></span>LIVE`
+    : `<span class="dot replay"></span>REPLAY`;
+  lamp.className = `lamp ${isLive ? "is-live" : "is-replay"}`;
+  const scrubbing = Date.now() < tape.scrubLock;
+  if (isLive && !scrubbing) {
+    showFrame(taskId, steps.at(-1));
+    tape.idx = steps.at(-1).n;
+  } else if (!isLive && tape.idx > scrub.max) {
+    tape.idx = scrub.max;
+  }
+  if (!isLive && !scrubbing && !panel.dataset.shown) {
+    panel.dataset.shown = "1";
+    showFrame(taskId, steps.at(-1));
+  }
+}
+
+$("tapeScrub").addEventListener("input", (e) => {
+  tape.scrubLock = Date.now() + 8000;
+  tape.idx = +e.target.value;
+  const frame = tape.frames.find((f) => f.n === tape.idx) || tape.frames.at(-1);
+  showFrame(tape.taskId, frame);
+});
+
 async function renderSteps(taskId) {
   const el = $("steps");
   try {
     const events = await api(`/tasks/${taskId}/events?limit=500`);
     const steps = events.filter((e) => e.kind === "step");
+    const t = state.tasks.find((x) => x.id === taskId);
+    updateTape(taskId, steps, t ? ACTIVE.has(t.status) : false);
     $("stepsHead").textContent = `RECORDED STEPS — ${steps.length}`;
     if (!steps.length) { el.innerHTML = `<div class="empty">no steps recorded yet</div>`; return; }
     el.innerHTML = steps

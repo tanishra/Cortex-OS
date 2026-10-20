@@ -295,6 +295,54 @@ input::placeholder { color: var(--ink-dim); }
 }
 .step-thumb:hover { border-color: var(--amber); }
 
+/* ── tape panel ── */
+.tape {
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  padding: 14px 24px;
+}
+.tape-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px;
+}
+.lamp {
+  display: inline-flex; align-items: center; gap: 7px;
+  font: 600 11px var(--mono);
+  letter-spacing: .12em;
+}
+.lamp .dot { width: 8px; height: 8px; border-radius: 50%; }
+.lamp .dot.live { background: var(--blue); animation: pulse 1.4s infinite; }
+.lamp .dot.replay { background: var(--amber); }
+.lamp.is-live { color: var(--blue); }
+.lamp.is-replay { color: var(--amber); }
+.tape-frame {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  min-height: 120px;
+  display: flex; align-items: center; justify-content: center;
+}
+.tape-frame img {
+  max-height: 46vh; max-width: 100%;
+  object-fit: contain;
+  display: block;
+}
+#tapeScrub {
+  width: 100%;
+  margin: 12px 0 8px;
+  accent-color: var(--amber);
+  cursor: pointer;
+}
+.tape-foot {
+  display: flex; justify-content: space-between; gap: 16px;
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+#tapeUrl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+#tapeActions { flex-shrink: 0; }
+#tapePos { color: var(--amber); font-size: 11px; }
+
 /* ── lightbox ── */
 .lightbox {
   position: fixed; inset: 0; z-index: 50;

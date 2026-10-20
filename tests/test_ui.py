@@ -17,6 +17,17 @@ def test_ui_assets_served():
     assert c.get("/ui/app.js").status_code == 200
 
 
+def test_ui_tape_panel_present():
+    html = TestClient(app).get("/ui/").text
+    assert 'id="tape"' in html
+    assert 'id="tapeScrub"' in html
+
+
+def test_app_js_has_tape_logic():
+    js = TestClient(app).get("/ui/app.js").text
+    assert "updateTape" in js and "loadImage" in js and "scrubLock" in js
+
+
 def test_ui_is_public_but_api_still_gated(monkeypatch):
     from cortex.config import settings
 
