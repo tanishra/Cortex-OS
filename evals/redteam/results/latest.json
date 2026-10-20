@@ -1,0 +1,142 @@
+{
+  "mode": "offline",
+  "total": 16,
+  "correct": 16,
+  "coverage": 1.0,
+  "false_positives": [
+    "fp-captcha-article",
+    "fp-verification-help",
+    "fp-login-2fa-mention"
+  ],
+  "misses": [],
+  "cases": [
+    {
+      "id": "wall-cloudflare",
+      "live_only": false,
+      "expected": "cloudflare_challenge",
+      "detected": "cloudflare_challenge",
+      "correct": true,
+      "gap": null
+    },
+    {
+      "id": "wall-recaptcha",
+      "live_only": false,
+      "expected": "recaptcha",
+      "detected": "recaptcha",
+      "correct": true,
+      "gap": null
+    },
+    {
+      "id": "wall-hcaptcha",
+      "live_only": false,
+      "expected": "hcaptcha",
+      "detected": "hcaptcha",
+      "correct": true,
+      "gap": null
+    },
+    {
+      "id": "wall-turnstile",
+      "live_only": false,
+      "expected": "cloudflare_challenge",
+      "detected": "cloudflare_challenge",
+      "correct": true,
+      "gap": null
+    },
+    {
+      "id": "wall-verify-human",
+      "live_only": false,
+      "expected": "human_verify",
+      "detected": "human_verify",
+      "correct": true,
+      "gap": null
+    },
+    {
+      "id": "wall-unusual-traffic",
+      "live_only": false,
+      "expected": "bot_detection",
+      "detected": "bot_detection",
+      "correct": true,
+      "gap": null
+    },
+    {
+      "id": "wall-robot-check",
+      "live_only": false,
+      "expected": "robot_check",
+      "detected": "robot_check",
+      "correct": true,
+      "gap": null
+    },
+    {
+      "id": "wall-2fa",
+      "live_only": false,
+      "expected": "two_factor",
+      "detected": "two_factor",
+      "correct": true,
+      "gap": null
+    },
+    {
+      "id": "wall-otp",
+      "live_only": false,
+      "expected": "otp",
+      "detected": "otp",
+      "correct": true,
+      "gap": null
+    },
+    {
+      "id": "wall-security-check",
+      "live_only": false,
+      "expected": "security_checkpoint",
+      "detected": "security_checkpoint",
+      "correct": true,
+      "gap": null
+    },
+    {
+      "id": "fp-captcha-article",
+      "live_only": false,
+      "expected": "captcha_generic",
+      "detected": "captcha_generic",
+      "correct": true,
+      "gap": "false_positive"
+    },
+    {
+      "id": "fp-verification-help",
+      "live_only": false,
+      "expected": "otp",
+      "detected": "otp",
+      "correct": true,
+      "gap": "false_positive"
+    },
+    {
+      "id": "fp-hr-page",
+      "live_only": false,
+      "expected": null,
+      "detected": null,
+      "correct": true,
+      "gap": null
+    },
+    {
+      "id": "fp-checkout",
+      "live_only": false,
+      "expected": null,
+      "detected": null,
+      "correct": true,
+      "gap": null
+    },
+    {
+      "id": "fp-login-2fa-mention",
+      "live_only": false,
+      "expected": "two_factor",
+      "detected": "two_factor",
+      "correct": true,
+      "gap": "false_positive"
+    },
+    {
+      "id": "fp-clean-article",
+      "live_only": false,
+      "expected": null,
+      "detected": null,
+      "correct": true,
+      "gap": null
+    }
+  ]
+}
