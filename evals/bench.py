@@ -52,6 +52,29 @@ def load_benchmark_tasks(
     return tasks
 
 
+_SEARCH_HOSTS = ("google.", "bing.", "duckduckgo", "yahoo.", "baidu.")
+
+
+def classify_failure(row, events) -> str:
+    """Why did this task end the way it did? Order matters — the wall event
+    beats search-fleeing (fleeing is the symptom, the block is the cause)."""
+    if row.status == "done":
+        return "success"
+    fled_search = False
+    for e in events:
+        if e.kind == "status" and e.payload_json and "waiting_human" in e.payload_json:
+            return "bot_blocked"
+        if e.kind == "step" and e.url:
+            host = (e.url.split("/")[2] if "://" in e.url else e.url).lower()
+            if any(s in host for s in _SEARCH_HOSTS):
+                fled_search = True
+    if fled_search:
+        return "wandered_offsite"
+    if (row.error or "").startswith("bench_timeout"):
+        return "timeout_on_site"
+    return "failed_other"
+
+
 def _metrics(row) -> dict:
     """Pull tokens/cost from the 'finished' event + exec time from step events."""
     events = db.list_events(row.id)
@@ -107,6 +130,7 @@ async def _run_case(
         "result": row.result,
         "error": (row.error or "")[:300],
         "verdict": "unscored",
+        "failure_category": classify_failure(row, db.list_events(row.id)),
     }
     rec.update(_metrics(row))
     return rec
@@ -126,6 +150,11 @@ def summarize(records: list[dict]) -> dict:
         vals = [r[key] for r in records if r.get(key) is not None]
         return round(sum(vals), 4) if vals else None
 
+    cats: dict[str, int] = {}
+    for r in records:
+        c = r.get("failure_category")
+        if c:
+            cats[c] = cats.get(c, 0) + 1
     return {
         "total": total,
         "passed": passed,
@@ -134,6 +163,7 @@ def summarize(records: list[dict]) -> dict:
         "success_rate": round(passed / scored, 3) if scored else None,
         "status_done": sum(1 for r in records if r["status"] == "done"),
         "status_failed": sum(1 for r in records if r["status"] == "failed"),
+        "failure_categories": cats,
         "avg_steps": _avg("steps"),
         "avg_duration_s": _avg("duration_s"),
         "tokens_in_total": _sum("tokens_in"),
@@ -159,14 +189,15 @@ def _isolate_eval_state() -> None:
 
 def _print_table(records: list[dict]) -> None:
     print(f"{'task':<12} {'status':<10} {'steps':>5} {'tok_in':>7} "
-          f"{'tok_out':>7} {'$':>7} {'s':>6} {'verdict':<9} site")
+          f"{'tok_out':>7} {'$':>7} {'s':>6} {'verdict':<9} {'category':<16} site")
     for r in records:
         site = r["website"].replace("https://", "").replace("http://", "")[:30]
         print(
             f"{r['task_id'][:12]:<12} {r['status']:<10} {r['steps']:>5} "
             f"{r['tokens_in'] or '-':>7} {r['tokens_out'] or '-':>7} "
             f"{r['cost_usd'] if r['cost_usd'] is not None else '-':>7} "
-            f"{r['duration_s']:>6} {r['verdict']:<9} {site}"
+            f"{r['duration_s']:>6} {r['verdict']:<9} "
+            f"{r.get('failure_category', '-'):<16} {site}"
         )
 
 
