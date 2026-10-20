@@ -14,3 +14,5 @@ os.environ.setdefault("OPENAI_API_KEY", "test-key")
 os.environ["VAULT_FERNET_KEY"] = Fernet.generate_key().decode()
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+# evals/ is not an installed package — keep it importable under any pytest entrypoint
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
