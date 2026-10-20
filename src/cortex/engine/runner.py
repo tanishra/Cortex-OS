@@ -240,7 +240,11 @@ async def _run_task(task_id: str, redis=None) -> None:
         state["status"] = status
         await emit("status", payload_json=json.dumps({"to": str(status)}))
 
-    llm = ChatOpenAI(model=settings.openai_model, api_key=settings.openai_api_key)
+    llm = ChatOpenAI(
+        model=settings.openai_model,
+        api_key=settings.openai_api_key,
+        max_completion_tokens=settings.openai_max_completion_tokens,
+    )
 
     browser = Browser(
         browser_profile=BrowserProfile(
@@ -385,6 +389,7 @@ async def _run_task(task_id: str, redis=None) -> None:
             ChatOpenAI(
                 model=settings.openai_fallback_model,
                 api_key=settings.openai_api_key,
+                max_completion_tokens=settings.openai_max_completion_tokens,
             )
             if settings.openai_fallback_model
             else None

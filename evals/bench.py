@@ -55,21 +55,41 @@ def load_benchmark_tasks(
 _SEARCH_HOSTS = ("google.", "bing.", "duckduckgo", "yahoo.", "baidu.")
 
 
-def classify_failure(row, events) -> str:
+def _host(url: str) -> str:
+    return (url.split("/")[2] if "://" in url else url).lower()
+
+
+def _same_site(host: str, site: str) -> bool:
+    return host == site or host.endswith("." + site)
+
+
+def classify_failure(row, events, start_url: str = "") -> str:
     """Why did this task end the way it did? Order matters — the wall event
     beats search-fleeing (fleeing is the symptom, the block is the cause)."""
     if row.status == "done":
         return "success"
+    start_host = _host(start_url) if start_url else ""
     fled_search = False
+    fled_domain = False
+    last_actions: list[str] = []
     for e in events:
         if e.kind == "status" and e.payload_json and "waiting_human" in e.payload_json:
             return "bot_blocked"
-        if e.kind == "step" and e.url:
-            host = (e.url.split("/")[2] if "://" in e.url else e.url).lower()
-            if any(s in host for s in _SEARCH_HOSTS):
-                fled_search = True
+        if e.kind == "step":
+            if e.url:
+                host = _host(e.url)
+                if any(s in host for s in _SEARCH_HOSTS):
+                    fled_search = True
+                elif start_host and not _same_site(host, start_host):
+                    fled_domain = True
+            actions = json.loads(e.actions_json or "[]")
+            last_actions = (last_actions + actions)[-6:]
     if fled_search:
         return "wandered_offsite"
+    if fled_domain:
+        return "wandered_domain"
+    if len(last_actions) >= 5 and len(set(last_actions)) == 1:
+        return "tool_loop"
     if (row.error or "").startswith("bench_timeout"):
         return "timeout_on_site"
     return "failed_other"
@@ -130,7 +150,9 @@ async def _run_case(
         "result": row.result,
         "error": (row.error or "")[:300],
         "verdict": "unscored",
-        "failure_category": classify_failure(row, db.list_events(row.id)),
+        "failure_category": classify_failure(
+            row, db.list_events(row.id), task["website"]
+        ),
     }
     rec.update(_metrics(row))
     return rec
@@ -208,8 +230,12 @@ async def run_bench(
     max_steps: int = 30,
     timeout_s: float = 300,
     tasks_file: Path | None = None,
+    model: str | None = None,
+    concurrency: int = 1,
 ) -> dict:
     _isolate_eval_state()
+    if model:
+        settings.openai_model = model  # read at Agent construction per task
     tasks = load_benchmark_tasks(level=level, limit=limit)
     if task_id:
         tasks = [t for t in load_benchmark_tasks() if t["task_id"] == task_id]
@@ -223,10 +249,16 @@ async def run_bench(
         if missing:
             raise ValueError(f"task ids not in dataset: {missing}")
         tasks = [by_id[w] for w in wanted]
-    results = []
-    for t in tasks:
-        logger.info("benchmark task %s — %s", t["task_id"][:8], t["website"])
-        results.append(await _run_case(t, max_steps, timeout_s))
+    sem = asyncio.Semaphore(max(1, concurrency))
+
+    async def _bounded(t):
+        async with sem:
+            logger.info(
+                "benchmark task %s — %s", t["task_id"][:8], t["website"]
+            )
+            return await _run_case(t, max_steps, timeout_s)
+
+    results = await asyncio.gather(*[_bounded(t) for t in tasks])
     report = {
         "meta": {
             "benchmark": "Online-Mind2Web (stagehand jsonl copy)",
@@ -280,6 +312,59 @@ def _print_summary(report: dict) -> None:
     print(json.dumps(s, indent=2))
 
 
+def compare_reports(paths: list[Path]) -> list[dict]:
+    """Side-by-side per-model summary rows from report files."""
+    rows = []
+    for p in paths:
+        r = json.loads(p.read_text())
+        s = r["summary"]
+        rows.append(
+            {
+                "model": r["meta"].get("model", "?"),
+                "n": s["total"],
+                "done": s["status_done"],
+                "success_rate": s["success_rate"],
+                "avg_steps": s["avg_steps"],
+                "avg_duration_s": s["avg_duration_s"],
+                "cost_per_task": s["cost_usd_per_task"],
+                "cost_total": s["cost_usd_total"],
+                "categories": s["failure_categories"],
+            }
+        )
+    return rows
+
+
+def _print_compare(paths: list[Path]) -> None:
+    rows = compare_reports(paths)
+    print(
+        f"{'model':<14} {'n':>3} {'done':>4} {'rate':>5} {'steps':>6} "
+        f"{'s':>7} {'$/task':>7} {'$total':>7}  categories"
+    )
+    for r in rows:
+        print(
+            f"{r['model']:<14} {r['n']:>3} {r['done']:>4} "
+            f"{r['success_rate'] if r['success_rate'] is not None else '-':>5} "
+            f"{r['avg_steps']:>6} {r['avg_duration_s']:>7} "
+            f"{r['cost_per_task'] if r['cost_per_task'] is not None else '-':>7} "
+            f"{r['cost_total'] if r['cost_total'] is not None else '-':>7}  "
+            f"{r['categories']}"
+        )
+
+
+def autojudge(path: Path) -> int:
+    """Provisional scoring: done + non-empty result = pass, else fail.
+    Honest about optimism — spot-check failures manually."""
+    report = json.loads(path.read_text())
+    for r in report["tasks"]:
+        if r["verdict"] == "unscored":
+            r["verdict"] = "pass" if r["status"] == "done" and r["result"] else "fail"
+    report["meta"]["scored"] = "auto(done+result)"
+    report["summary"] = summarize(report["tasks"])
+    path.write_text(json.dumps(report, indent=2))
+    _print_summary(report)
+    return 0
+
+
 def show_report(path: Path) -> int:
     report = json.loads(path.read_text())
     _print_table(report["tasks"])
@@ -296,14 +381,23 @@ def main() -> int:
                    help="file with one task_id per line")
     p.add_argument("--max-steps", type=int, default=30)
     p.add_argument("--timeout", type=float, default=300)
+    p.add_argument("--concurrency", type=int, default=1)
     p.add_argument("--judge", type=Path, default=None)
+    p.add_argument("--autojudge", type=Path, default=None)
+    p.add_argument("--compare", type=Path, nargs="+", default=None)
     p.add_argument("--report", type=Path, default=None)
+    p.add_argument("--model", default=None)
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(name)s %(message)s")
 
     if args.judge:
         return judge(args.judge)
+    if args.autojudge:
+        return autojudge(args.autojudge)
+    if args.compare:
+        _print_compare(args.compare)
+        return 0
     if args.report:
         return show_report(args.report)
     if not settings.openai_api_key:
@@ -312,7 +406,7 @@ def main() -> int:
     asyncio.run(
         run_bench(
             args.level, args.limit, args.task, args.max_steps, args.timeout,
-            args.tasks_file,
+            args.tasks_file, args.model, args.concurrency,
         )
     )
     return 0

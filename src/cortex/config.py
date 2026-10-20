@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     task_max_tokens: int = 0  # 0 = off; default per-task token budget
     task_latency_budget_s: float = 0.0  # 0 = off; flag tasks slower than this
     openai_fallback_model: str = ""  # fallback_llm for browser-use; empty = none
+    # browser_use defaults to 4096 — too small for big structured outputs,
+    # caused ModelOutputTruncatedError on benchmark tasks.
+    openai_max_completion_tokens: int = 16384
 
     require_api_key: bool = False
     api_keys: str = ""  # comma-separated
