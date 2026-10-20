@@ -16,11 +16,19 @@ POST /tasks {"task": "go to github.com/browser-use/browser-use and report the st
 Every task produces a complete audit trail: per-step actions, page snapshots,
 screenshots, token/cost telemetry — replayable end to end.
 
+## Watch it work
+
+Open `http://127.0.0.1:8901/ui/` — the flight-recorder UI: task rail with live
+status, a tape panel that auto-advances step screenshots while the agent runs
+(scrub back through frames), approvals inbox (approve/deny), cancel/resume,
+and `/ui/ops.html` for fleet stats.
+
 ## Architecture
 
 ```mermaid
 flowchart LR
     Client["Client (REST)"] --> API["FastAPI<br/>tasks · sessions · approvals · artifacts"]
+    UI["Flight-recorder UI<br/>/ui replay · live tape · ops"] --> API
     API --> Q["Queue<br/>arq + Redis"]
     Q --> W["Task Worker"]
     Q --> SW["Session Worker"]
@@ -78,7 +86,8 @@ Optional but recommended outside dev: `REQUIRE_API_KEY=true`.
 
 - **Allowlists** — `allowed_domains`, `allowed_actions` (read-only vs transactional).
 - **Human gates** — `approval_domains`, `approval_actions` → pause + `/approvals`.
-- **Escalation** — CAPTCHA/2FA detected → `waiting_human` + `HUMAN_NOTIFY_URL` webhook → `POST /tasks/{id}/resume`.
+- **Escalation** — two-tier wall detection (widget signatures always fire; keyword phrases suppressed on prose/login pages — no false pauses on articles) → `waiting_human` + webhook → `POST /tasks/{id}/resume`.
+- **Anti-wander** — prompt rule + runtime `tool_loop` stop (5 identical actions → typed failure).
 - **Retries** — transient failures retry with backoff; exhausted → `dead_letter:`.
 - **Durable resume** — worker restart re-queues active tasks with a replay checkpoint; orphaned Chromium is reaped.
 - **Budgets** — `max_tokens` per task (`cost_exceeded`), `task_timeout_s`, `max_steps`.
@@ -94,16 +103,22 @@ docker compose up                 # api :8901 + worker + redis + postgres + s3mo
 
 Containers run non-root; artifacts go to S3Mock, DB to Postgres.
 
-## Evals
+## Evaluation & evidence
 
-Deterministic suite (local fixture pages incl. prompt-injection bait):
+Three suites:
 
 ```bash
-python -m evals.run            # needs OPENAI_API_KEY
-python -m evals.run --case injection-hidden --json report.json
+python -m evals.run            # local fixtures incl. injection bait — needs API key
+python -m evals.bench --model gpt-5-mini --limit 15  # Online-Mind2Web public tasks
+python -m evals.redteam.run    # 27 attack pages, wall-detector coverage — free, CI-gated
 ```
 
-Scores content + leak checks; exits non-zero on any failure.
+- **`evals.run`** — deterministic local fixture pages; content + leak checks.
+- **`evals.bench`** — public benchmark runner (status, steps, tokens, $, failure category; `--compare`, `--autojudge`). 15 easy tasks × OpenAI models: `gpt-5-mini` = `gpt-5-nano` at 26.7%, nano ~5× cheaper.
+- **`evals.redteam`** — attack library (wall spoofs, injection bait, nav traps); 16/16 offline coverage.
+
+Most self-hosted agents score ~30% on live sites — failures are auto-classified
+(bot-blocked, wandering, timeouts) rather than hidden.
 
 ## Tests
 
@@ -112,7 +127,5 @@ uv run pytest -q
 uv run ruff check src tests alembic evals
 ```
 
-## Status
-
-Phases P0–P5 shipped. Roadmap in [`docs/plan/03-roadmap.md`](docs/plan/03-roadmap.md);
-deep design reading in [`docs/browser-agents/`](docs/browser-agents/README.md).
+*Built to answer one question: can a browser agent be operated, measured, and
+audited like production software?*
