@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CORTEX-OS — Flight Recorder</title>
+<link rel="stylesheet" href="/ui/styles.css">
+</head>
+<body>
+
+<header id="topbar">
+  <div class="brand">
+    <span class="brand-name">CORTEX-OS</span>
+    <span class="rec-lamp" id="recLamp"><span class="lamp-dot"></span>REC</span>
+  </div>
+  <div class="topbar-right">
+    <button class="ghost-btn" id="submitToggle">+ New task</button>
+    <button class="ghost-btn" id="keyBtn">API key</button>
+  </div>
+</header>
+
+<div id="keyGate" class="key-gate hidden">
+  <div class="key-card">
+    <div class="key-title">API KEY REQUIRED</div>
+    <input id="keyInput" type="password" placeholder="x-api-key value" autocomplete="off">
+    <button class="primary-btn" id="keySave">Connect</button>
+    <div class="key-hint" id="keyHint">Key is stored in this browser only.</div>
+  </div>
+</div>
+
+<div id="submitPanel" class="submit-panel hidden">
+  <input id="submitText" placeholder="Task — e.g. Find the price of Product X on this site">
+  <input id="submitUrl" placeholder="Start URL (optional)">
+  <button class="primary-btn" id="submitGo">Dispatch</button>
+</div>
+
+<main id="shell">
+  <aside id="rail">
+    <div class="rail-head">
+      <span class="label">TASKS</span>
+      <button class="ghost-btn small" id="refreshBtn">refresh</button>
+    </div>
+    <div id="taskList" class="task-list">
+      <div class="empty">no tasks recorded</div>
+    </div>
+  </aside>
+
+  <section id="detail">
+    <div id="detailEmpty" class="detail-empty">
+      <div class="stamp">SELECT A TASK TO PLAY BACK</div>
+    </div>
+    <div id="detailBody" class="hidden">
+      <div class="detail-head">
+        <div class="detail-status-row">
+          <span id="dChip" class="chip"></span>
+          <span id="dTask" class="detail-task"></span>
+        </div>
+        <div class="detail-meta" id="dMeta"></div>
+        <div class="detail-actions" id="dActions"></div>
+      </div>
+      <div id="approvalsStrip" class="approvals hidden"></div>
+      <div id="resultBlock" class="result-block hidden"></div>
+      <div class="steps-head label" id="stepsHead">RECORDED STEPS</div>
+      <div id="steps"></div>
+    </div>
+  </section>
+</main>
+
+<div id="lightbox" class="lightbox hidden"></div>
+
+<script src="/ui/app.js"></script>
+</body>
+</html>

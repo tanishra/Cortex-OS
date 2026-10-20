@@ -1,5 +1,6 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -68,13 +69,25 @@ app.include_router(routes_approvals.router)
 app.include_router(routes_admin.router)
 app.include_router(routes_stats.router)
 
+# Flight-recorder UI — static shell at /ui (auth still enforced on API calls).
+_ui_dir = Path(__file__).resolve().parent.parent.parent / "ui"
+if _ui_dir.is_dir():
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/ui", StaticFiles(directory=_ui_dir, html=True), name="ui")
+
 PUBLIC_PATHS = {"/health", "/ready", "/docs", "/openapi.json", "/redoc"}
+
+
+def _is_public(path: str) -> bool:
+    # UI shell is public; the API key it collects still gates every fetch.
+    return path in PUBLIC_PATHS or path == "/ui" or path.startswith("/ui/")
 
 
 @app.middleware("http")
 async def api_key_auth(request: Request, call_next):
     """Optional API-key gate. Enabled via REQUIRE_API_KEY=true + hashed key rows."""
-    if settings.require_api_key and request.url.path not in PUBLIC_PATHS:
+    if settings.require_api_key and not _is_public(request.url.path):
         row = await db.arun(db.authenticate_key, request.headers.get("x-api-key"))
         if not row:
             return JSONResponse(status_code=401, content={"detail": "invalid api key"})
