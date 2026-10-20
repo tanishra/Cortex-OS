@@ -107,6 +107,116 @@ def test_max_completion_tokens_setting():
     assert settings.openai_max_completion_tokens >= 8192
 
 
+def test_tool_loop_runtime_stop(monkeypatch):
+    """5 identical consecutive actions → task FAILED with tool_loop error."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from cortex.engine import runner
+    from cortex.models import TaskRequest, TaskStatus
+    from cortex.store import db
+
+    db.init_db()
+    row, _ = db.create_task(TaskRequest(task="loop it"))
+
+    step_state = SimpleNamespace(
+        url="https://a.com", title="A", dom_state=None, browser_errors=[]
+    )
+    action = SimpleNamespace(
+        model_dump=lambda exclude_unset: {"find_elements": {"s": "x"}}
+    )
+    out = SimpleNamespace(
+        action=[action], evaluation_previous_goal=None, memory=None,
+        next_goal="go",
+    )
+
+    class _A:
+        def __init__(self, **kwargs):
+            self._cb = kwargs["register_new_step_callback"]
+            self._stop = kwargs["register_should_stop_callback"]
+            self.tools = SimpleNamespace(act=AsyncMock())
+            self.token_cost_service = SimpleNamespace(
+                get_usage_summary=AsyncMock(
+                    return_value=SimpleNamespace(total_tokens=0)
+                )
+            )
+
+        async def run(self, max_steps=None):
+            for i in range(1, 6):
+                await self._cb(step_state, out, i)
+                if await self._stop():
+                    break
+            return SimpleNamespace(
+                usage=None, agent_steps=lambda: [], final_result=lambda: "x",
+                is_successful=lambda: False, errors=lambda: [],
+            )
+
+    monkeypatch.setattr(runner, "Agent", _A)
+    monkeypatch.setattr(runner, "ChatOpenAI", lambda **k: object())
+    monkeypatch.setattr(
+        runner, "Browser", lambda **k: SimpleNamespace(kill=AsyncMock())
+    )
+    asyncio.run(runner.run_task(row.id))
+    updated = db.get_task(row.id)
+    assert updated.status == TaskStatus.FAILED
+    assert updated.error.startswith("tool_loop")
+
+
+def test_tool_loop_no_stop_on_varied_actions(monkeypatch):
+    """Varied actions must NOT trigger the loop guard."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from cortex.engine import runner
+    from cortex.models import TaskRequest, TaskStatus
+    from cortex.store import db
+
+    db.init_db()
+    row, _ = db.create_task(TaskRequest(task="varied"))
+
+    step_state = SimpleNamespace(
+        url="https://a.com", title="A", dom_state=None, browser_errors=[]
+    )
+    names = ["click", "input", "click", "navigate", "extract"]
+
+    class _A:
+        def __init__(self, **kwargs):
+            self._cb = kwargs["register_new_step_callback"]
+            self._stop = kwargs["register_should_stop_callback"]
+            self.tools = SimpleNamespace(act=AsyncMock())
+            self.token_cost_service = SimpleNamespace(
+                get_usage_summary=AsyncMock(
+                    return_value=SimpleNamespace(total_tokens=0)
+                )
+            )
+
+        async def run(self, max_steps=None):
+            for i, name in enumerate(names, 1):
+                out = SimpleNamespace(
+                    action=[
+                        SimpleNamespace(
+                            model_dump=lambda exclude_unset, _n=name: {_n: {}}
+                        )
+                    ],
+                    evaluation_previous_goal=None, memory=None, next_goal="go",
+                )
+                await self._cb(step_state, out, i)
+                if await self._stop():
+                    break
+            return SimpleNamespace(
+                usage=None, agent_steps=lambda: [], final_result=lambda: "ok",
+                is_successful=lambda: True, errors=lambda: [],
+            )
+
+    monkeypatch.setattr(runner, "Agent", _A)
+    monkeypatch.setattr(runner, "ChatOpenAI", lambda **k: object())
+    monkeypatch.setattr(
+        runner, "Browser", lambda **k: SimpleNamespace(kill=AsyncMock())
+    )
+    asyncio.run(runner.run_task(row.id))
+    assert db.get_task(row.id).status == TaskStatus.DONE
+
+
 def test_summarize_categories_includes_new():
     recs = [
         {"status": "failed", "verdict": "fail", "steps": 1, "duration_s": 1,

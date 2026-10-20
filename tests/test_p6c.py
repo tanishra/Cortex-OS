@@ -65,5 +65,5 @@ def test_summarize_has_categories():
 def test_prompt_has_stay_on_site_rule():
     from cortex.engine.prompts import SAFETY_EXTENSION
 
-    assert "Do NOT use Google, Bing, DuckDuckGo" in SAFETY_EXTENSION
+    assert "search engines or alternative providers" in SAFETY_EXTENSION
     assert "do not wander to other sites" in SAFETY_EXTENSION

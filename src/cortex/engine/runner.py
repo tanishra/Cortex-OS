@@ -230,6 +230,8 @@ async def _run_task(task_id: str, redis=None) -> None:
             resume and resume.get("prev_status") == "waiting_human"
         ),
         "cost_exceeded": False,
+        "tool_loop": "",
+        "recent_actions": [],
         "latency_exceeded": False,
         "start_ts": time.monotonic(),
     }
@@ -335,6 +337,7 @@ async def _run_task(task_id: str, redis=None) -> None:
             logger.info("Task %s: approval requested for %s", task_id, url)
 
         actions = _action_names(agent_output)
+        state["recent_actions"] = (state["recent_actions"] + actions)[-6:]
         now = time.monotonic()
         duration_ms = int((now - state["last_step_ts"]) * 1000)
         state["last_step_ts"] = now
@@ -364,6 +367,13 @@ async def _run_task(task_id: str, redis=None) -> None:
 
     async def should_stop() -> bool:
         if state["domain_blocked"] or await db.arun(db.is_cancel_requested, task_id):
+            return True
+        recent = state["recent_actions"][-5:]
+        if len(recent) == 5 and len(set(recent)) == 1:
+            state["tool_loop"] = recent[0]
+            logger.warning(
+                "Task %s: tool loop — '%s' repeated 5x, stopping", task_id, recent[0]
+            )
             return True
         if token_budget > 0:
             try:
@@ -507,6 +517,13 @@ async def _run_task(task_id: str, redis=None) -> None:
 
         if await db.arun(db.has_denied_approval, task_id):
             await set_status(TaskStatus.CANCELLED, error="approval denied")
+            return
+
+        if state["tool_loop"]:
+            await set_status(
+                TaskStatus.FAILED,
+                error=f"tool_loop: action '{state['tool_loop']}' repeated 5 times",
+            )
             return
 
         if state["cost_exceeded"]:

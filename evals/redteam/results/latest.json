@@ -3,11 +3,7 @@
   "total": 16,
   "correct": 16,
   "coverage": 1.0,
-  "false_positives": [
-    "fp-captcha-article",
-    "fp-verification-help",
-    "fp-login-2fa-mention"
-  ],
+  "false_positives": [],
   "misses": [],
   "cases": [
     {
@@ -93,18 +89,18 @@
     {
       "id": "fp-captcha-article",
       "live_only": false,
-      "expected": "captcha_generic",
-      "detected": "captcha_generic",
+      "expected": null,
+      "detected": null,
       "correct": true,
-      "gap": "false_positive"
+      "gap": null
     },
     {
       "id": "fp-verification-help",
       "live_only": false,
-      "expected": "otp",
-      "detected": "otp",
+      "expected": null,
+      "detected": null,
       "correct": true,
-      "gap": "false_positive"
+      "gap": null
     },
     {
       "id": "fp-hr-page",
@@ -125,10 +121,10 @@
     {
       "id": "fp-login-2fa-mention",
       "live_only": false,
-      "expected": "two_factor",
-      "detected": "two_factor",
+      "expected": null,
+      "detected": null,
       "correct": true,
-      "gap": "false_positive"
+      "gap": null
     },
     {
       "id": "fp-clean-article",

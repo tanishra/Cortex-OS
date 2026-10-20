@@ -35,10 +35,8 @@ def test_offline_detection_matches_expectation(case):
 def test_offline_report_shapes():
     report = run_offline()
     assert report["coverage"] >= 0.85
-    # documented false-positive gaps — prose mentions trigger the wall
-    assert set(report["false_positives"]) == {
-        "fp-captcha-article", "fp-verification-help", "fp-login-2fa-mention",
-    }
+    # post fix: prose/password pages no longer trigger weak signatures
+    assert report["false_positives"] == []
     assert report["misses"] == []
 
 

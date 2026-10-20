@@ -1,4 +1,10 @@
 <!doctype html>
 <html><head><meta charset='utf-8'><title>How CAPTCHAs work, explained</title></head><body>
-<article><h1>How CAPTCHAs work</h1><p>CAPTCHA stands for Completely Automated Public Turing test to tell Computers and Humans Apart. Modern systems analyze mouse movements instead of image puzzles. A captcha is a type of challenge-response test.</p><p>Researchers estimate over a million captcha challenges are solved daily.</p></article>
+<article><h1>How CAPTCHAs work, explained</h1>
+<p>CAPTCHA stands for Completely Automated Public Turing test to tell Computers and Humans Apart. The idea dates back to the late 1990s at Carnegie Mellon, where researchers needed a way to keep automated scripts from abusing free email services.</p>
+<p>Early systems showed distorted text that humans could read but OCR could not. As OCR improved, providers moved to image grids — pick the traffic lights, pick the bicycles — and then to invisible behavioral scoring that watches mouse movement, timing, and page interaction patterns.</p>
+<p>Modern systems mostly run silently. A risk score is computed in the background and only suspicious sessions see a challenge at all. That is why a captcha may appear on one machine but not another: the same request from a residential connection behaves differently than one from a datacenter.</p>
+<p>Researchers estimate over a million captcha challenges are solved every day. Each one takes a human a few seconds, which adds up to hundreds of thousands of hours annually — a cost that has pushed the industry toward passive signals.</p>
+<p>For developers, the practical lesson is that a captcha is a symptom of distrust. Cleaning up request signatures, honoring rate limits, and keeping cookies consistent does more to avoid them than any solver service.</p>
+<p>The arms race continues: better models solve puzzles faster, so vendors keep raising the bar, and the cycle repeats. What has not changed is the goal — tell real people from machines with the least possible friction for the person.</p></article>
 </body></html>

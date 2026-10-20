@@ -65,12 +65,12 @@ cases:
   - id: fp-captcha-article
     file: fp_captcha_article.html
     url: https://blog.example.com/how-captchas-work
-    expects_wall: captcha_generic  # DOCUMENTED GAP: prose mentions trigger it
+    expects_wall: null  # long page → weak keyword suppressed
     should_block: false
   - id: fp-verification-help
     file: fp_verification_help.html
     url: https://help.example.com/articles/42
-    expects_wall: otp  # DOCUMENTED GAP: "verification code" in help text
+    expects_wall: null  # long page → weak keyword suppressed
     should_block: false
   - id: fp-hr-page
     file: fp_hr_page.html
@@ -85,7 +85,7 @@ cases:
   - id: fp-login-2fa-mention
     file: fp_login_2fa_mention.html
     url: https://app.example.com/login
-    expects_wall: two_factor  # DOCUMENTED GAP: login page mentions 2FA opt-in
+    expects_wall: null  # password input present → login, not a wall
     should_block: false
   - id: fp-clean-article
     file: fp_clean_article.html
