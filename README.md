@@ -1,4 +1,4 @@
-# Cortex-OS
+<h1 align="center">Cortex-OS</h1>
 
 **A production-grade browser agent service.** Give it a task in plain English — it
 drives a real browser and does it: navigates, clicks, fills forms, extracts data.
